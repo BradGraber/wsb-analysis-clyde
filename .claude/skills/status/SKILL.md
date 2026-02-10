@@ -53,7 +53,7 @@ Use the output from these three commands to build the summary in step 3.
 
 ### 3. Present Summary
 
-Format a concise report:
+Format a concise report. The `progress` command output includes phase lifecycle status (`pending`, `tests_written`, `in_progress`, `gate_pending`, `complete`) next to each phase name.
 
 ```
 Project: [from PRD title or technical brief if available]
@@ -63,24 +63,32 @@ Progress:
   Stories: X/Y complete
   Tasks:   X/Y complete
 
+Phases:
+  phase-a: [name] [status] — X/Y tasks (N%)
+  phase-b: [name] [status] — X/Y tasks (N%)
+
 In Progress:
   - [task-id]: [title]
 
+Pending Story Gates:
+  - [story-id]: [title] — gate awaiting review
+
 Skipped:
   - [task-id]: [title] — [reason]
-
-Current Phase: [phase name]
-  [X/Y tasks complete in this phase]
 
 Suggested Next Action:
   → [what to do next]
 ```
 
+Note: "Pending Story Gates" and "In Progress" sections should only appear if there are items to show. To detect pending story gates, look for in-progress tasks reported by `progress`. The `resume-phase` command provides full detail if needed.
+
 ### 4. Suggest Next Action
 
 Based on the state, suggest one of:
 - **"Run `/analyze`"** — if inputs exist but plan.db doesn't
-- **"Resume task [id]: [title]"** — if a task is in-progress
+- **"Resume orphaned task [id]: [title]"** — if a task is in_progress (left over from a previous session)
+- **"Run pending story gate for [story-id]"** — if a story completed but its gate review hasn't run
+- **"Run phase gate for [phase-id]"** — if a phase status is `gate_pending`
 - **"Start next task: [id] [title]"** — if nothing is in-progress, pick the next unblocked pending task
-- **"Phase [X] complete — review exit criteria before starting Phase [Y]"** — if a phase boundary was reached
+- **"Phase [X] complete — start Phase [Y]"** — if a phase status is `complete` and the next phase is `pending`
 - **"All tasks complete"** — if everything is done

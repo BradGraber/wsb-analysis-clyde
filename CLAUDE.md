@@ -30,8 +30,8 @@ Clyde is a reusable framework for Claude Code-driven software development. Clone
 - `project-workspace/` — The project workspace (source code in `src/`)
 - `.claude/rules/` — Clyde's permanent framework rules
 - `.claude/agents/` — Subagent definitions
-  - Intake (analyze): tech-brief-drafter, tech-brief-compressor, tech-brief-reviewer, tech-brief-fact-checker, plan-validator, phase-extractor
-  - Implementation: implementer, test-writer
+  - Intake (analyze): tech-brief-drafter, tech-brief-compressor, tech-brief-reviewer, tech-brief-fact-checker, phase-extractor
+  - Implementation: implementer, test-writer, plan-validator
 - `.claude/framework-manifest` — Lists framework-owned paths for `/update`
 
 ## Rules

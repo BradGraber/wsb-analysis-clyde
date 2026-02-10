@@ -106,17 +106,15 @@ Read output/technical-brief.md and input/PRD.md, then return your assessment.
 
 **Important:** The orchestrator must never edit `output/technical-brief.md` directly. All brief content comes from the tech-brief-compressor (or tech-brief-drafter if no compression needed). If the tech-brief-compressor undershoots or overshoots the line target, that's a length FAIL for the tech-brief-reviewer to catch — do not fix it manually.
 
-### 5B: Verify Plan Database (plan-validator agent)
+### 5B: Verify Plan Database (script — no agent needed)
 
-Spawn the **plan-validator** agent (model: **sonnet**) with this prompt. Launch in parallel with 5A.
+Run the intake verification script. Launch in parallel with 5A.
 
-```
-Verify output/plan.db for Intake Phase completeness.
-Expected counts: {{X}} epics, {{Y}} stories, {{Z}} tasks.
-Run the checks specified in your instructions and return your report.
+```bash
+python3 scripts/plan-ops.py verify-intake --expected-epics {{X}} --expected-stories {{Y}} --expected-tasks {{Z}}
 ```
 
-The plan-validator does not depend on the final brief — it only checks that the file exists and has content.
+This checks count completeness, referential integrity, data quality, status defaults, and technical brief existence. Returns a JSON report with `overall: PASS/FAIL` and an `issues` array. If FAIL, present the issues to the user in Step 7.
 
 ## Step 6: Fact-Check Brief (one-time, after compression loop)
 

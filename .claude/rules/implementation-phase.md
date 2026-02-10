@@ -15,14 +15,17 @@ When the user asks to implement, build, or work on tasks, follow these steps:
 # Find the next unblocked pending task (optionally scoped to a phase)
 python3 scripts/plan-ops.py next-task [--phase PHASE_ID]
 
+# Find all unblocked pending tasks for parallel execution (one per story, optionally capped)
+python3 scripts/plan-ops.py available-tasks [--phase PHASE_ID] [--limit N]
+
 # Get full context for a task (task + story + epic + dependencies as JSON)
 python3 scripts/plan-ops.py task-context TASK_ID
 
 # Mark a task as in_progress (cascades to story/epic)
 python3 scripts/plan-ops.py start-task TASK_ID
 
-# Mark a task as complete (cascades to story/epic when all children done)
-python3 scripts/plan-ops.py complete-task TASK_ID
+# Mark a task as complete with files changed (cascades to story/epic when all children done)
+python3 scripts/plan-ops.py complete-task TASK_ID --files file1.py file2.py --json
 
 # Mark a task as skipped with a reason (does NOT cascade)
 python3 scripts/plan-ops.py skip-task TASK_ID --reason "description"
@@ -33,16 +36,55 @@ python3 scripts/plan-ops.py retry-task TASK_ID
 # List all skipped tasks (optionally scoped to a phase)
 python3 scripts/plan-ops.py list-skipped [--phase PHASE_ID]
 
+# Get aggregated files changed for a story or phase
+python3 scripts/plan-ops.py story-files STORY_ID
+python3 scripts/plan-ops.py phase-files PHASE_ID
+
+# Get all stories in a phase (with descriptions containing acceptance criteria)
+python3 scripts/plan-ops.py phase-stories PHASE_ID
+
 # Show overall project progress (task/story/epic counts, in-progress items, phases)
 python3 scripts/plan-ops.py progress
 
 # Show phase progress, entry/exit criteria
 python3 scripts/plan-ops.py phase-status PHASE_ID
+
+# Detect session resume state for a phase (returns JSON with routing)
+python3 scripts/plan-ops.py resume-phase PHASE_ID
+
+# Update phase lifecycle status
+python3 scripts/plan-ops.py update-phase PHASE_ID --status STATUS
+
+# Record story gate review result
+python3 scripts/plan-ops.py update-story-gate STORY_ID --status STATUS
 ```
+
+## Resume Detection
+
+Before entering the execution loop, check if this is a resumed session:
+
+```bash
+python3 scripts/plan-ops.py resume-phase PHASE_ID
+```
+
+This returns a JSON object with `resume_action` telling you where to pick up. The response always includes `orphaned_tasks` and `pending_story_gates` arrays regardless of the action.
+
+- **`start_fresh`** (phase status: `pending`) — Normal start. Go to Step 1.
+- **`find_next_task`** (phase status: `tests_written` or `in_progress`, no orphans or pending gates) — Tests already exist. Skip Steps 1-2, go to Step 3.
+- **`resume_orphan`** (orphaned in_progress tasks found, no pending gates) — A previous session crashed mid-task. The `orphaned_tasks` array lists them. Process as a batch:
+  1. Get context for all orphans (`task-context` for each)
+  2. Do NOT call `start-task` — they're already in_progress
+  3. Spawn implementers in parallel (Step 5) for all orphans
+  4. Evaluate results and complete tasks (Steps 6-7)
+  5. After orphans are resolved, check for any pending story gates before continuing to Step 3
+- **`resume_mixed`** (both orphaned tasks AND pending story gates exist) — A previous batch session crashed partway through processing. Handle orphans first (they may complete more stories), then run all pending story gates (Step 8), then continue to Step 3.
+- **`run_story_gate`** (pending story gates found, no orphans) — A previous session completed a story but crashed before running its gate. The `pending_story_gates` array lists them. Run Step 8 for each, then go to Step 3.
+- **`run_phase_gate`** (phase status: `gate_pending`) — All tasks were completed but the phase gate never ran or user didn't approve. Go directly to Step 10.
+- **`already_complete`** (phase status: `complete`) — This phase is done. Report to user and suggest the next phase.
 
 ## Execution Loop
 
-The main conversation acts as an **orchestrator**. Track files changed per story as tasks complete — this accumulated list feeds into story and phase reviews.
+The main conversation acts as an **orchestrator**. Files changed per task are tracked in plan.db via `complete-task --files` and aggregated via `story-files` / `phase-files` for reviews.
 
 ### 1. Check Phase Entry Criteria
 
@@ -50,68 +92,122 @@ The main conversation acts as an **orchestrator**. Track files changed per story
 
 ### 2. Write Tests
 
-Spawn **test-writer** agent (model: **sonnet**) with:
-- All story acceptance criteria for stories in this phase
-- Phase exit criteria
+Run `plan-ops.py phase-stories PHASE_ID` to get all stories and their acceptance criteria. Then spawn **test-writer** agent (model: **sonnet**) with:
+- The story acceptance criteria from `phase-stories` output
+- Phase exit criteria (from `phase-status` in step 1)
 - `output/technical-brief.md`
 
-The test-writer produces test files that define "done" for this phase. All tests are expected to fail initially — no implementation exists yet. Note the test runner command for later use.
+The test-writer produces test files that define "done" for this phase. All tests are expected to fail initially — no implementation exists yet. Note the test runner command for use in steps 8 and 10.
 
-### 3. Find Next Task
+After the test-writer completes, record that tests exist:
 
-`plan-ops.py next-task --phase PHASE_ID` — if no unblocked tasks remain, go to step 10.
+```bash
+python3 scripts/plan-ops.py update-phase PHASE_ID --status tests_written
+```
+
+### 3. Find Available Tasks
+
+```bash
+plan-ops.py available-tasks --phase PHASE_ID --limit 3
+```
+
+This returns a `tasks` array of unblocked pending tasks, **one per story**, capped at `--limit`. Tasks from different stories are safe to parallelize — they work on independent features. The default limit of 3 balances parallelism against context cost.
+
+- If the `tasks` array is **empty** → go to Step 10 (phase gate).
+- If the array has **one task** → proceed through Steps 4-8 for that single task (identical to sequential flow).
+- If the array has **multiple tasks** → proceed through Steps 4-8 as a batch.
+
+For single-task or single-story execution granularity, use `next-task` instead (unchanged).
 
 ### 4. Get Context and Start
+
+For each task in the batch:
 
 ```bash
 plan-ops.py task-context TASK_ID
 plan-ops.py start-task TASK_ID
 ```
 
-### 5. Spawn Implementer
+`task-context` calls can run in parallel (read-only). `start-task` calls run sequentially — each writes to the DB, but since batch tasks are always in different stories, the cascades don't conflict.
 
-Spawn **implementer** subagent (model: **sonnet**) with the task context JSON + `output/technical-brief.md`.
+### 5. Spawn Implementers
 
-The implementer returns a structured report with status (COMPLETE / BLOCKED / PARTIAL), files changed, acceptance criteria check, and concerns.
+Spawn **one implementer subagent per task** (model: **sonnet**), all in a **single message** (parallel Task calls). Each receives its own task context JSON + `output/technical-brief.md`.
 
-### 6. Evaluate Implementer Result
+All implementers return structured reports independently with status (COMPLETE / BLOCKED / PARTIAL), files changed, acceptance criteria check, and concerns.
 
-Read the implementer's structured report and route:
+### 6. Evaluate Results
 
-- **COMPLETE**: Verify the files-changed list is non-empty and each acceptance criterion is addressed. If concerns are listed, note them but proceed unless they indicate a real problem. → Go to step 7.
-- **BLOCKED**: Run `plan-ops.py skip-task TASK_ID --reason "<reason from report>"`. → Go to step 3.
-- **PARTIAL**: If unmet criteria are core to the task, retry once — re-spawn the implementer with the original context plus the partial report as feedback. If retry still returns PARTIAL or BLOCKED, skip the task. If unmet criteria are deferrable (tests, docs), complete the task and note what's deferred. → Go to step 7 or step 3.
+Process each implementer's result and sort into three lists:
+
+- **completed**: COMPLETE status — verify the files-changed list is non-empty and each acceptance criterion is addressed. If concerns are listed, note them but proceed unless they indicate a real problem.
+- **skipped**: BLOCKED status — run `plan-ops.py skip-task TASK_ID --reason "<reason>"` immediately for each.
+- **retry**: PARTIAL status — needs one retry attempt.
+
+#### 6a. Handle Retries
+
+For each PARTIAL task, re-spawn the implementer **sequentially** (not in parallel — retries include the previous result as feedback). After retry:
+
+- COMPLETE or PARTIAL-but-deferrable → add to completed list
+- Still BLOCKED or PARTIAL on core criteria → run `skip-task`
 
 **Never retry more than once per task.** Diminishing returns waste context.
 
-### 7. Complete Task
+### 7. Complete Tasks
 
-`plan-ops.py complete-task TASK_ID` — track the files changed from this task for the current story.
+Process the completed list **sequentially**:
 
-If `complete-task` reports that the parent story auto-completed ("Story X: complete"), go to step 8. Otherwise, go to step 3.
+```bash
+plan-ops.py complete-task TASK_ID --files <files from implementer report> --json
+```
 
-### 8. Story Gate
+The `--files` flag records which files this task changed. The `--json` flag returns structured output — check the `story_completed` field. When a story completes, its `gate_status` is automatically set to `'pending'`.
 
-When a story completes, run two checks:
+Collect any tasks where `story_completed` is true into a **gates list**.
+
+Sequential processing is required — `complete-task` cascades to stories/epics and we need the `story_completed` flag from each call.
+
+### 8. Story Gates
+
+For each story in the gates list, run two checks:
 
 **a) Run story tests** — execute the tests the test-writer created for this story's acceptance criteria.
 
 **b) Spawn plan-validator** (model: **sonnet**) with:
-- Story acceptance criteria
-- Aggregated files-changed list from all tasks in this story
+- Story acceptance criteria (from `task-context` story description, or `phase-stories`)
+- Aggregated files-changed list from `plan-ops.py story-files STORY_ID`
 - `output/technical-brief.md`
 - Test results from (a)
 
-**If both pass** → go to step 3.
-**If tests fail or review returns FAIL** → present issues to the user. The user decides whether to fix now (spawn targeted implementer) or defer. Do not auto-fix.
+**If both pass:**
+
+```bash
+python3 scripts/plan-ops.py update-story-gate STORY_ID --status passed
+```
+
+**If tests fail or review returns FAIL:**
+
+```bash
+python3 scripts/plan-ops.py update-story-gate STORY_ID --status failed
+```
+
+Present issues to the user. The user decides whether to fix now (spawn targeted implementer) or defer. Do not auto-fix.
+
+Story gates run sequentially — each may need user attention if it fails.
 
 ### 9. Repeat
 
-Go to step 3 until `next-task` returns no unblocked tasks.
+Go to Step 3 for the next batch until `available-tasks` returns an empty array.
 
 ### 10. Phase Gate
 
-When no unblocked tasks remain in the phase:
+When no unblocked tasks remain in the phase, first mark the phase as awaiting its gate:
+
+```bash
+python3 scripts/plan-ops.py update-phase PHASE_ID --status gate_pending
+```
+
+Then:
 
 **a) Run all phase tests** — execute the full test suite the test-writer created for this phase.
 
@@ -119,7 +215,7 @@ When no unblocked tasks remain in the phase:
 
 **c) Spawn plan-validator** (model: **sonnet**) with:
 - Phase exit criteria (from `plan-ops.py phase-status`)
-- All files created/modified across the entire phase
+- All files created/modified across the phase from `plan-ops.py phase-files PHASE_ID`
 - `output/technical-brief.md`
 - Skipped task list (if any)
 - Test results from (a)
@@ -132,13 +228,19 @@ When no unblocked tasks remain in the phase:
 
 **User must approve before proceeding to the next phase.**
 
+After user approval:
+
+```bash
+python3 scripts/plan-ops.py update-phase PHASE_ID --status complete
+```
+
 ## Error Recovery
 
 - **Skipped tasks**: Presented at phase boundaries with reasons. The user can:
   - `plan-ops.py retry-task TASK_ID` to reset for another attempt
   - Clarify requirements and retry
   - Defer to a later phase
-  - Accept the skip (manually complete if the functionality was handled elsewhere)
+  - Accept the skip — run `plan-ops.py complete-task TASK_ID` to mark it done and trigger cascade
 - **PARTIAL retries**: Maximum one retry per task. The retry includes the original context plus the partial report from the first attempt.
 - **Story review failures**: Present to user — do not auto-fix. The user decides whether to spawn a targeted fix or defer.
 - **Undeclared dependencies**: If an implementer reports needing code from a task not listed as a dependency, note it as a discovered dependency. Skip the task and present at the phase boundary. Do not modify plan.db dependencies automatically.
@@ -149,7 +251,14 @@ When no unblocked tasks remain in the phase:
 - For single task/story execution, skip the test-writing step (step 2) — tests are phase-scoped
 
 ## Notes
-- `next-task` handles dependency resolution — it only returns tasks whose dependencies are all complete
+- `available-tasks` returns unblocked tasks from independent stories for parallel execution — **one task per story** to prevent file conflicts between concurrent implementers
+- `next-task` handles dependency resolution — it only returns tasks whose dependencies are all complete (still used for single-task execution)
 - `complete-task` handles cascading — it auto-completes the parent story/epic when all children are done
-- `start-task` cascades in_progress status up to story and epic
+- `complete-task` also sets `gate_status = 'pending'` on the story when it completes — this is the durable signal for story gate reviews
+- `complete-task --files` records files changed per task in plan.db — use `story-files`/`phase-files` to aggregate for reviews
+- `complete-task --json` returns structured output with `story_completed`/`epic_completed`/`story_gate_status` for routing
+- `start-task` cascades in_progress status up to story, epic, and phase
+- `resume-phase` detects session state and returns routing instructions — always call it before entering the execution loop
+- `resume-phase` returns `resume_mixed` when both orphaned tasks and pending story gates exist (possible after a batch session crash) — handle orphans first, then gates
+- Phase lifecycle: `pending` → `tests_written` → `in_progress` → `gate_pending` → `complete`
 - Skipped tasks prevent their parent story from auto-completing — this is correct behavior

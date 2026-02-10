@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS stories (
     priority TEXT CHECK (priority IN ('high', 'medium', 'low')),
     story_points TEXT,
     description TEXT,
+    gate_status TEXT CHECK (gate_status IN ('pending', 'passed', 'failed')),
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'complete', 'skipped'))
 );
 
@@ -33,6 +34,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     description TEXT,
     acceptance_criteria TEXT,
     skip_reason TEXT,
+    files_changed TEXT,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'complete', 'skipped'))
 );
 
@@ -44,7 +46,9 @@ CREATE TABLE IF NOT EXISTS phases (
     goal TEXT,
     entry_criteria TEXT,
     exit_criteria TEXT,
-    estimated_duration TEXT
+    estimated_duration TEXT,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'tests_written', 'in_progress', 'gate_pending', 'complete'))
 );
 
 -- Phase items: maps which stories/epics belong to each phase

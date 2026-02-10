@@ -78,36 +78,40 @@ Launch with `./clyde` — it will show your project status and suggest running `
 > /analyze
 ```
 
-Claude will:
-1. Read everything in `input/`
-2. Build `output/plan.db` — a SQLite database with all epics, stories, tasks, phases, and dependencies
-3. Generate `output/technical-brief.md` — a concise tech reference distilled from the PRD
-4. Present a summary for your review
+The Intake Phase builds two artifacts from your inputs:
 
-Review the plan and technical brief before proceeding.
+1. **`output/plan.db`** — A SQLite database with all epics, stories, tasks, phases, and dependencies. Built by a deterministic Python script, then enriched with phase data extracted from `work-sequence.md`.
+2. **`output/technical-brief.md`** — A concise (50-100 line) tech reference distilled from the PRD. Goes through a multi-agent pipeline: draft extraction, iterative compression with review, and claim-by-claim fact-checking against the PRD.
+
+Both artifacts are verified — the database via automated integrity checks (counts, referential integrity, status defaults), the brief via accuracy, completeness, and length review. You approve the results before moving to implementation.
+
+See [LIFECYCLE.md](LIFECYCLE.md) for the full step-by-step breakdown.
 
 ### 7. Implement (Implementation Phase)
 
 Once you approve the analysis, tell Claude to implement:
 
 ```
-> implement
+> implement phase-a
 ```
 
-Claude acts as an orchestrator:
-1. Queries `plan.db` for the next pending task (respecting dependencies and phase order)
-2. Spawns a focused implementer subagent with just the context it needs (task + story + epic + technical brief)
-3. The subagent writes code in `project-workspace/src/`
-4. The orchestrator updates task status in `plan.db`
-5. Repeats until the scope is complete
+Claude works through one phase at a time using a **test-first, gate-checked** execution loop:
 
-By default, Claude works through one phase at a time (as defined in `work-sequence.md`), checking entry/exit criteria. You can also ask it to work on a specific task, story, or epic.
+1. **Write tests** — A test-writer agent generates failing tests from the phase's acceptance criteria before any code is written
+2. **Execute tasks** — For each task (in dependency order), the orchestrator spawns a focused implementer subagent with just the context it needs. The implementer returns a structured report (COMPLETE / BLOCKED / PARTIAL) with files changed and acceptance criteria checks.
+3. **Story gates** — When all tasks in a story complete, tests run and a plan-validator reviews the implementation against the story's acceptance criteria. Failures are presented to you — not auto-fixed.
+4. **Phase gate** — When the phase is done, the full test suite runs, skipped tasks are reviewed, and the plan-validator checks exit criteria. You approve before the next phase begins.
+
+Tasks that can't be completed are **skipped with a reason** and surfaced at phase boundaries, where you decide whether to retry, defer, or accept. Blocked tasks are never retried more than once.
+
+You can also target a specific task, story, or epic instead of a full phase. See [LIFECYCLE.md](LIFECYCLE.md) for the complete step-by-step reference.
 
 ## Directory Structure
 
 ```
 my-project/
 ├── README.md
+├── LIFECYCLE.md                    # Full lifecycle reference (intake + implementation details)
 ├── CLAUDE.md                       # Framework rules (read by Claude Code)
 ├── clyde                           # Launcher script (auto-detects state, runs /init or /status)
 ├── schema.sql                      # SQLite schema for plan.db
