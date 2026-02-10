@@ -48,9 +48,9 @@ Ask the user the following questions using AskUserQuestion:
 
 Based on the user's choices, perform the following. **Always confirm the actions with the user before executing.**
 
-**a) Remove the Clyde remote:**
+**a) Rename the Clyde remote** (keeps it for future `/update` pulls):
 ```bash
-git remote remove origin
+git remote rename origin clyde
 ```
 
 **b) If squashing history:**
@@ -104,10 +104,12 @@ Project initialized!
   Project: [name]
   Branch:  [branch name]
   Remote:  [url or "none configured"]
+  Clyde:   [clyde remote URL] (for framework updates via /update)
   History: [squashed / preserved]
 
 Next steps:
   1. Add your PRD, epics, stories, tasks, and work-sequence to input/
   2. Run /analyze to build the plan database
   3. Optionally run /setup to configure local permissions
+  4. Run /update anytime to pull framework updates from the Clyde repo
 ```

@@ -23,23 +23,35 @@ git clone https://github.com/BradGraber/clyde.git my-project
 cd my-project
 ```
 
-### 2. Set Up Permissions
+### 2. Launch
 
-Run the setup skill to configure local permissions (git access, file editing, etc.):
-
-```
+```bash
 ./clyde
+```
+
+The `clyde` launcher is a small script that starts Claude Code and auto-detects project state. On a fresh clone it runs `/init`; on an initialized project it runs `/status` to show progress and suggest the next action. Use it every time — it's the single entry point.
+
+### 3. Initialize (`/init`)
+
+On first launch, `./clyde` detects the fresh clone and kicks off `/init` automatically. It walks you through three choices:
+
+- **Renames the Clyde remote** from `origin` to `clyde` — keeps it for future `/update` pulls, prevents accidental pushes to the framework
+- **Squash or keep history** — squashing to a single clean commit is recommended, since the framework's development history isn't relevant to your project
+- **Set a new remote** if you already have a repo ready, or skip and add one later
+
+A gate rule blocks `/analyze` and all other workflows until `/init` has been completed.
+
+### 4. Set Up Permissions (`/setup`, optional)
+
+Clyde ships with conservative shared permissions (read-only git, sqlite3). `/setup` lets you opt into broader auto-approvals for your local environment — git writes, file editing, web access, build tools — so Claude doesn't prompt you for every operation.
+
+```
 > /setup
 ```
 
-Or start Claude Code directly:
+You can skip this and approve actions individually as they come up, or run `/setup` later. Your choices are saved to `.claude/settings.local.json` (gitignored, personal to your clone).
 
-```
-claude
-> /setup
-```
-
-### 3. Add Your Inputs
+### 5. Add Your Inputs
 
 Place your pre-built project plan files in `input/`:
 
@@ -57,9 +69,9 @@ input/
 
 Each epic, story, and task file uses YAML frontmatter for structured fields (id, dependencies, priority, etc.) with the markdown body providing the full description and acceptance criteria.
 
-### 4. Analyze (Phase 1)
+### 6. Analyze (Phase 1)
 
-Start Claude Code (or use the `clyde` launcher, which auto-checks project status on startup):
+Launch with `./clyde` — it will show your project status and suggest running `/analyze`:
 
 ```
 ./clyde
@@ -74,7 +86,7 @@ Claude will:
 
 Review the plan and technical brief before proceeding.
 
-### 5. Implement (Phase 2)
+### 7. Implement (Phase 2)
 
 Once you approve the analysis, tell Claude to implement:
 
@@ -85,7 +97,7 @@ Once you approve the analysis, tell Claude to implement:
 Claude acts as an orchestrator:
 1. Queries `plan.db` for the next pending task (respecting dependencies and phase order)
 2. Spawns a focused implementer subagent with just the context it needs (task + story + epic + technical brief)
-3. The subagent writes code in `src/`
+3. The subagent writes code in `project-workspace/src/`
 4. The orchestrator updates task status in `plan.db`
 5. Repeats until the scope is complete
 
@@ -97,7 +109,7 @@ By default, Claude works through one phase at a time (as defined in `work-sequen
 my-project/
 ├── README.md
 ├── CLAUDE.md                       # Framework rules (read by Claude Code)
-├── clyde                           # Launcher script (runs /status on startup)
+├── clyde                           # Launcher script (auto-detects state, runs /init or /status)
 ├── schema.sql                      # SQLite schema for plan.db
 ├── scripts/
 │   └── build-plan-db.py            # Parses inputs → populates plan.db (zero deps)
@@ -107,11 +119,18 @@ my-project/
 │   ├── rules/                      # Auto-loaded instruction files
 │   │   └── phase2-implement.md
 │   ├── agents/                     # Subagent definitions
-│   │   ├── analyzer.md
-│   │   ├── implementer.md
-│   │   └── reviewer.md
+│   │   ├── tech-brief-drafter.md   #   Phase 1: drafts brief from PRD
+│   │   ├── tech-brief-compressor.md#   Phase 1: compresses brief to target length
+│   │   ├── tech-brief-reviewer.md  #   Phase 1: reviews brief for accuracy
+│   │   ├── tech-brief-fact-checker.md # Phase 1: claim-by-claim verification
+│   │   ├── plan-validator.md       #   Phase 1: validates plan.db integrity
+│   │   ├── phase-extractor.md      #   Phase 1: extracts phases from work-sequence
+│   │   ├── implementer.md          #   Phase 2: writes code for a single task
+│   │   └── test-writer.md         #   Phase 2: writes tests from acceptance criteria
 │   └── skills/                     # User-invocable skills
+│       ├── init/                   # One-time project initialization
 │       ├── analyze/                # Phase 1: build plan.db + technical brief
+│       ├── update/                 # Pull framework updates from upstream
 │       ├── status/                 # Check project state, suggest next action
 │       ├── setup/                  # Configure local permissions
 │       └── end-session/            # Wrap up session, update memory
@@ -119,20 +138,24 @@ my-project/
 ├── output/                         # Generated artifacts (gitignored)
 │   ├── plan.db                     # SQLite: plan + progress tracking
 │   └── technical-brief.md          # Concise tech reference
-├── src/                            # Built software goes here
+├── project-workspace/              # The project's own workspace
+│   └── src/                       # Built software goes here
 └── examples/
     └── input/                      # Format reference files
 ```
 
 ## The `clyde` Launcher
 
-The `clyde` script at the repo root is a convenience wrapper that starts Claude Code and immediately runs `/status` to show you where the project stands:
+The `clyde` script at the repo root is the recommended way to start every session. It launches Claude Code and auto-detects project state:
+
+- **Fresh clone** (not yet initialized) → runs `/init` to walk you through setup
+- **Initialized project** → runs `/status` to show progress and suggest the next action
 
 ```bash
 ./clyde
 ```
 
-This gives you an instant summary of progress and a suggested next action, so you can pick up right where you left off.
+Use `./clyde` instead of bare `claude` — it ensures you always start with the right context.
 
 ## Skills
 
@@ -140,10 +163,24 @@ Skills are slash commands you can run inside Claude Code:
 
 | Skill | Description |
 |-------|-------------|
+| `/init` | One-time project setup — detach from Clyde remote, clean git history, prepare standalone project |
 | `/analyze` | Run Phase 1 — scan inputs, build `plan.db`, generate technical brief |
 | `/status` | Check project state — shows progress, in-progress tasks, and suggests next action |
 | `/setup` | Configure local permissions — git access, file editing, sqlite |
+| `/update` | Pull latest framework files from upstream Clyde repo |
 | `/end-session` | Wrap up the session — update memory, summarize progress, note open items |
+
+## Updating the Framework
+
+After initializing a project with `/init`, the upstream Clyde repo is kept as a git remote named `clyde`. To pull framework updates (new agents, improved skills, bug fixes) without affecting your project code:
+
+```
+> /update
+```
+
+This fetches the latest framework files, shows a diff, and applies changes with your confirmation. It never touches `project-workspace/`, `input/`, or `output/`.
+
+If you initialized your project before `/update` existed, it will guide you through adding the `clyde` remote.
 
 ## How It Works
 
@@ -216,7 +253,7 @@ Task completion cascades: when all tasks in a story are done, the story is marke
 
 - **Never modify `input/`** — these files are your source of truth, treated as read-only
 - **`output/` is gitignored** — it contains generated artifacts specific to each project run
-- **All code goes in `src/`** — the implementer subagent writes here
+- **All code goes in `project-workspace/src/`** — the implementer subagent writes here; project READMEs, configs, and scripts also live under `project-workspace/`
 - **The PRD is the authority** — when in doubt, the PRD wins
 
 ## License

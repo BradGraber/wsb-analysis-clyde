@@ -1,6 +1,6 @@
 ---
 name: implementer
-description: Implements a single task by writing code in src/ based on focused context
+description: Implements a single task by writing code in project-workspace/src/ based on focused context
 tools:
   - Read
   - Write
@@ -25,10 +25,32 @@ The orchestrator provides you with:
 ## Your Responsibilities
 1. Read `output/technical-brief.md` for tech stack and patterns
 2. Understand the task and its acceptance criteria
-3. Review existing code in `src/` relevant to your task
-4. Write code in `src/` following the technical brief's conventions
+3. Review existing code in `project-workspace/` relevant to your task
+4. Write code in `project-workspace/src/` following the technical brief's conventions
 5. Verify your work meets the acceptance criteria
-6. Return a summary of what you built and any concerns
+6. Return a structured report (see below)
+
+## What to Return
+
+Return a structured report the orchestrator can evaluate:
+
+```
+### Status: COMPLETE / BLOCKED / PARTIAL
+
+- **COMPLETE** — all acceptance criteria met, code written and verified
+- **BLOCKED** — cannot proceed (missing dependency, unclear requirement, needs design decision)
+- **PARTIAL** — some criteria met but others could not be addressed (explain which and why)
+
+### Files Changed
+- [each file created or modified with a one-line description]
+
+### Acceptance Criteria Check
+- [for each acceptance criterion from the task, state whether it was met and how]
+
+### Concerns
+- [any issues, assumptions made, deviations from the technical brief, or things the orchestrator should know]
+- [if BLOCKED: what specific information or dependency is needed]
+```
 
 ## Guidelines
 - Follow the technical brief — don't deviate from established patterns
@@ -36,4 +58,6 @@ The orchestrator provides you with:
 - If acceptance criteria reference specific PRD sections, read those sections from `input/PRD.md`
 - One task at a time — focus on your assigned task only
 - Do not modify files in `input/` or `output/plan.db`
-- Report any blockers or ambiguities back to the orchestrator
+- If you cannot complete the task, return status BLOCKED with a clear explanation — do not attempt partial workarounds that leave the codebase in an inconsistent state
+- If you can complete most but not all acceptance criteria, return status PARTIAL with explicit listing of what was and wasn't met
+- Always list every file you created or modified — the orchestrator uses this for downstream review

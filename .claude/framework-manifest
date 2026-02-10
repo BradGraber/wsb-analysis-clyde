@@ -1,0 +1,24 @@
+# Clyde Framework Manifest
+# Lists all framework-owned paths for the /update skill.
+#
+# D <dir>  — directory-replace: delete stale files, sync all from upstream
+# F <file> — individual file: replace with upstream version
+#
+# Paths NOT listed here are project-owned and never touched by /update.
+# __pycache__/ directories are always excluded from directory syncs.
+
+D .claude/agents
+D scripts
+F .claude/rules/phase2-implement.md
+F .claude/settings.json
+F .claude/skills/analyze/SKILL.md
+F .claude/skills/init/SKILL.md
+F .claude/skills/setup/SKILL.md
+F .claude/skills/status/SKILL.md
+F .claude/skills/end-session/SKILL.md
+F .claude/skills/update/SKILL.md
+F .claude/framework-manifest
+F schema.sql
+F CLAUDE.md
+F README.md
+F clyde

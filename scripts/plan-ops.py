@@ -11,6 +11,9 @@ Usage:
   python3 scripts/plan-ops.py task-context TASK_ID
   python3 scripts/plan-ops.py start-task TASK_ID
   python3 scripts/plan-ops.py complete-task TASK_ID
+  python3 scripts/plan-ops.py skip-task TASK_ID --reason "description"
+  python3 scripts/plan-ops.py retry-task TASK_ID
+  python3 scripts/plan-ops.py list-skipped [--phase PHASE_ID]
   python3 scripts/plan-ops.py progress
   python3 scripts/plan-ops.py phase-status PHASE_ID
 """
@@ -295,15 +298,22 @@ def cmd_progress(conn):
     epic_by = {s['status']: s['count'] for s in epic_stats}
 
     print('Overall Progress:')
+    task_skipped = task_by.get('skipped', 0)
+    story_skipped = story_by.get('skipped', 0)
+    epic_skipped = epic_by.get('skipped', 0)
+
     print(f'  Tasks:   {task_by.get("complete", 0)}/{task_total} complete, '
           f'{task_by.get("in_progress", 0)} in progress, '
-          f'{task_by.get("pending", 0)} pending')
+          f'{task_by.get("pending", 0)} pending'
+          + (f', {task_skipped} skipped' if task_skipped else ''))
     print(f'  Stories: {story_by.get("complete", 0)}/{story_total} complete, '
           f'{story_by.get("in_progress", 0)} in progress, '
-          f'{story_by.get("pending", 0)} pending')
+          f'{story_by.get("pending", 0)} pending'
+          + (f', {story_skipped} skipped' if story_skipped else ''))
     print(f'  Epics:   {epic_by.get("complete", 0)}/{epic_total} complete, '
           f'{epic_by.get("in_progress", 0)} in progress, '
-          f'{epic_by.get("pending", 0)} pending')
+          f'{epic_by.get("pending", 0)} pending'
+          + (f', {epic_skipped} skipped' if epic_skipped else ''))
 
     # List in-progress tasks
     in_progress = conn.execute(
@@ -370,7 +380,9 @@ def cmd_phase_status(conn, phase_id):
     in_progress = by_status.get('in_progress', 0)
     pending = by_status.get('pending', 0)
 
-    print(f'Tasks: {complete}/{total} complete, {in_progress} in progress, {pending} pending')
+    skipped = by_status.get('skipped', 0)
+
+    print(f'Tasks: {complete}/{total} complete, {in_progress} in progress, {pending} pending, {skipped} skipped')
     print()
 
     print('Entry Criteria:')
@@ -380,6 +392,87 @@ def cmd_phase_status(conn, phase_id):
     print('Exit Criteria:')
     for line in (phase['exit_criteria'] or 'None').split('\n'):
         print(f'  {line}')
+
+
+def cmd_skip_task(conn, task_id, reason):
+    """Mark a task as skipped with a reason. Does NOT cascade to parent story/epic."""
+    task = conn.execute(
+        'SELECT id, title, story_id, epic_id, status FROM tasks WHERE id = ?',
+        (task_id,)
+    ).fetchone()
+
+    if not task:
+        print(f'ERROR: task {task_id} not found', file=sys.stderr)
+        sys.exit(1)
+
+    if task['status'] not in ('pending', 'in_progress'):
+        print(f'WARNING: task {task_id} is {task["status"]}, expected pending or in_progress',
+              file=sys.stderr)
+
+    conn.execute(
+        'UPDATE tasks SET status = \'skipped\', skip_reason = ? WHERE id = ?',
+        (reason, task_id)
+    )
+    conn.commit()
+
+    print(f'Skipped: {task_id} — {task["title"]}')
+    print(f'  Reason: {reason}')
+
+
+def cmd_retry_task(conn, task_id):
+    """Reset a skipped task to pending for retry."""
+    task = conn.execute(
+        'SELECT id, title, status FROM tasks WHERE id = ?',
+        (task_id,)
+    ).fetchone()
+
+    if not task:
+        print(f'ERROR: task {task_id} not found', file=sys.stderr)
+        sys.exit(1)
+
+    if task['status'] != 'skipped':
+        print(f'ERROR: task {task_id} is {task["status"]}, not skipped', file=sys.stderr)
+        sys.exit(1)
+
+    conn.execute(
+        'UPDATE tasks SET status = \'pending\', skip_reason = NULL WHERE id = ?',
+        (task_id,)
+    )
+    conn.commit()
+
+    print(f'Reset to pending: {task_id} — {task["title"]}')
+
+
+def cmd_list_skipped(conn, phase_id=None):
+    """List all skipped tasks with their reasons."""
+    if phase_id:
+        tasks = conn.execute(
+            'SELECT DISTINCT t.id, t.title, t.skip_reason, t.story_id, t.epic_id '
+            'FROM tasks t '
+            'JOIN phase_items pi ON '
+            '  (pi.item_type = \'story\' AND pi.item_id = t.story_id) '
+            '  OR (pi.item_type = \'epic\' AND pi.item_id = t.epic_id) '
+            'WHERE pi.phase_id = ? AND t.status = \'skipped\' '
+            'ORDER BY t.id',
+            (phase_id,)
+        ).fetchall()
+    else:
+        tasks = conn.execute(
+            'SELECT id, title, skip_reason, story_id, epic_id '
+            'FROM tasks WHERE status = \'skipped\' '
+            'ORDER BY id'
+        ).fetchall()
+
+    if not tasks:
+        scope = f' in phase {phase_id}' if phase_id else ''
+        print(f'No skipped tasks{scope}')
+        return
+
+    print(f'Skipped Tasks ({len(tasks)}):')
+    for t in tasks:
+        print(f'  {t["id"]}: {t["title"]}')
+        print(f'    Reason: {t["skip_reason"] or "no reason given"}')
+        print(f'    Story: {t["story_id"]}, Epic: {t["epic_id"]}')
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +508,16 @@ if __name__ == '__main__':
     p_phase = sub.add_parser('phase-status', help='Show phase progress')
     p_phase.add_argument('phase_id', help='Phase ID')
 
+    p_skip = sub.add_parser('skip-task', help='Mark task as skipped')
+    p_skip.add_argument('task_id', help='Task ID')
+    p_skip.add_argument('--reason', required=True, help='Why the task was skipped')
+
+    p_retry = sub.add_parser('retry-task', help='Reset skipped task to pending')
+    p_retry.add_argument('task_id', help='Task ID')
+
+    p_list_skip = sub.add_parser('list-skipped', help='List all skipped tasks')
+    p_list_skip.add_argument('--phase', help='Filter to a specific phase ID')
+
     args = parser.parse_args()
     conn = get_db(args.project_root)
 
@@ -430,5 +533,11 @@ if __name__ == '__main__':
         cmd_progress(conn)
     elif args.command == 'phase-status':
         cmd_phase_status(conn, args.phase_id)
+    elif args.command == 'skip-task':
+        cmd_skip_task(conn, args.task_id, args.reason)
+    elif args.command == 'retry-task':
+        cmd_retry_task(conn, args.task_id)
+    elif args.command == 'list-skipped':
+        cmd_list_skipped(conn, args.phase)
 
     conn.close()

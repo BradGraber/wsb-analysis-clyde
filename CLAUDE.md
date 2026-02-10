@@ -12,7 +12,7 @@ Clyde is a reusable framework for Claude Code-driven software development. Clone
 ### Phase 2: Implement
 - Orchestrator queries `output/plan.db` for next work item
 - Spawns implementer subagent with focused context (task + story + epic + technical brief)
-- Subagent builds in `src/`, returns results
+- Subagent builds in `project-workspace/src/`, returns results
 - Orchestrator updates task status in `plan.db`
 - Default execution unit is phase (from work-sequence), but task/story/epic also supported
 
@@ -27,9 +27,12 @@ Clyde is a reusable framework for Claude Code-driven software development. Clone
 - `output/` — Generated artifacts
   - `plan.db` — SQLite database (plan + progress tracking)
   - `technical-brief.md` — Distilled tech reference from PRD
-- `src/` — The built software
+- `project-workspace/` — The project workspace (source code in `src/`)
 - `.claude/rules/` — Clyde's permanent framework rules
-- `.claude/agents/` — Subagent definitions (analyzer, implementer, reviewer)
+- `.claude/agents/` — Subagent definitions
+  - Phase 1 (analyze): tech-brief-drafter, tech-brief-compressor, tech-brief-reviewer, tech-brief-fact-checker, plan-validator, phase-extractor
+  - Phase 2 (implement): implementer, test-writer
+- `.claude/framework-manifest` — Lists framework-owned paths for `/update`
 
 ## Rules
 
@@ -39,5 +42,5 @@ Clyde is a reusable framework for Claude Code-driven software development. Clone
 - The PRD and plan in `input/` are the source of truth for requirements
 - `output/plan.db` is the source of truth for progress and execution state
 - `output/technical-brief.md` is the concise tech reference — subagents read this, not the full PRD
-- All built software goes in `src/`
+- All built software goes in `project-workspace/src/`
 - Use the orchestrator + subagent model to manage context

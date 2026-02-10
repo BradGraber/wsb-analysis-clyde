@@ -1,11 +1,11 @@
 ---
-name: brief-reviewer
+name: tech-brief-reviewer
 description: Reviews a technical brief against the PRD for accuracy, completeness, and length
 tools:
   - Read
 ---
 
-# Brief Reviewer Agent
+# Tech Brief Reviewer Agent
 
 You review a technical brief by checking it against the original PRD. You do NOT edit the brief — you only report issues.
 
@@ -88,7 +88,7 @@ Use PASS if all checks pass and there are no inferences.
 - [list each inference with brief quote + note that no PRD source was found]
 
 ### Summary
-[1-2 sentences: what the compressor should fix (for FAIL), or what the user should review (for REVIEW NEEDED)]
+[1-2 sentences: what the tech-brief-compressor should fix (for FAIL), or what the user should review (for REVIEW NEEDED)]
 ```
 
 ## Rules

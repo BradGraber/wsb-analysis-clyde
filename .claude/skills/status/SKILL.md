@@ -48,6 +48,9 @@ SELECT status, COUNT(*) FROM tasks GROUP BY status;
 SELECT id, title FROM tasks WHERE status = 'in_progress';
 SELECT id, title FROM stories WHERE status = 'in_progress';
 
+-- Skipped tasks (need attention)
+SELECT id, title, skip_reason FROM tasks WHERE status = 'skipped';
+
 -- Phase progress (tasks per phase via phase_items → stories → tasks)
 SELECT p.sequence, p.name,
   COUNT(CASE WHEN t.status = 'complete' THEN 1 END) AS done,
@@ -73,6 +76,9 @@ Progress:
 
 In Progress:
   - [task-id]: [title]
+
+Skipped:
+  - [task-id]: [title] — [reason]
 
 Current Phase: [phase name]
   [X/Y tasks complete in this phase]

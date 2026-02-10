@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS epics (
     title TEXT NOT NULL,
     priority TEXT CHECK (priority IN ('high', 'medium', 'low')),
     description TEXT,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'complete'))
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'complete', 'skipped'))
 );
 
 -- Stories: child items of epics, parsed from input/stories/story-NNN-NNN.md
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS stories (
     priority TEXT CHECK (priority IN ('high', 'medium', 'low')),
     story_points TEXT,
     description TEXT,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'complete'))
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'complete', 'skipped'))
 );
 
 -- Tasks: child items of stories, parsed from input/tasks/task-NNN-NNN-NN.md
@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     complexity INTEGER,
     description TEXT,
     acceptance_criteria TEXT,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'complete'))
+    skip_reason TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'complete', 'skipped'))
 );
 
 -- Phases: execution phases parsed from input/work-sequence.md

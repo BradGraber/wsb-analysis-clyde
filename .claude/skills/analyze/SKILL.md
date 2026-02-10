@@ -47,7 +47,7 @@ Read input/work-sequence.md and extract phase data.
 Return the result in the format specified in your instructions.
 ```
 
-### 3b: Analyzer (model: **sonnet**)
+### 3b: Tech Brief Drafter (model: **sonnet**)
 
 ```
 Read input/PRD.md and extract all system-wide technical details into a draft technical brief.
@@ -67,7 +67,7 @@ After step 4, two independent workflows can run in parallel:
 
 ### 5A: Compress Technical Brief (iterative loop)
 
-The analyzer's draft brief will likely be too long (200-500+ lines). This compresses it to 50-100 lines while preserving accuracy against the PRD.
+The tech-brief-drafter's output will likely be too long (200-500+ lines). This compresses it to 50-100 lines while preserving accuracy against the PRD.
 
 #### 5A.1: Check Length
 
@@ -75,7 +75,7 @@ Count the non-blank lines in `output/technical-brief.md`. If already 50-100 line
 
 #### 5A.2: Compress
 
-Spawn the **compressor** agent (model: **sonnet**) with this prompt. On retries, include the review feedback section.
+Spawn the **tech-brief-compressor** agent (model: **sonnet**) with this prompt. On retries, include the review feedback section.
 
 ```
 Compress the technical brief to 50-100 non-blank lines.
@@ -87,11 +87,11 @@ Read input/PRD.md as ground truth — remove anything not sourced from the PRD.
 --- END FEEDBACK ---}}
 ```
 
-Write the compressor's returned markdown to `output/technical-brief.md`. **Do NOT manually edit the brief** — if the content needs changes, route it back through the compress-review loop.
+Write the tech-brief-compressor's returned markdown to `output/technical-brief.md`. **Do NOT manually edit the brief** — if the content needs changes, route it back through the compress-review loop.
 
 #### 5A.3: Review
 
-Spawn the **brief-reviewer** agent (model: **sonnet**) with this prompt:
+Spawn the **tech-brief-reviewer** agent (model: **sonnet**) with this prompt:
 
 ```
 Review the technical brief for accuracy and completeness against the PRD.
@@ -104,11 +104,11 @@ Read output/technical-brief.md and input/PRD.md, then return your assessment.
 - **FAIL** (accuracy, completeness, or length issues) → go to 5A.2 with the review feedback. Maximum 3 iterations of the compress-review loop. If still failing after 3 iterations, stop and present issues to the user.
 - **REVIEW NEEDED** (accuracy/completeness pass, but inferences flagged) → compression complete. Present the inferences to the user during Step 7 so they can approve or reject each one. Do NOT auto-iterate on inferences — they require human judgment.
 
-**Important:** The orchestrator must never edit `output/technical-brief.md` directly. All brief content comes from the compressor (or analyzer if no compression needed). If the compressor undershoots or overshoots the line target, that's a length FAIL for the reviewer to catch — do not fix it manually.
+**Important:** The orchestrator must never edit `output/technical-brief.md` directly. All brief content comes from the tech-brief-compressor (or tech-brief-drafter if no compression needed). If the tech-brief-compressor undershoots or overshoots the line target, that's a length FAIL for the tech-brief-reviewer to catch — do not fix it manually.
 
-### 5B: Verify Plan Database (reviewer agent)
+### 5B: Verify Plan Database (plan-validator agent)
 
-Spawn the **reviewer** agent (model: **haiku**) with this prompt. Launch in parallel with 5A.
+Spawn the **plan-validator** agent (model: **sonnet**) with this prompt. Launch in parallel with 5A.
 
 ```
 Verify output/plan.db for Phase 1 completeness.
@@ -116,13 +116,13 @@ Expected counts: {{X}} epics, {{Y}} stories, {{Z}} tasks.
 Run the checks specified in your instructions and return your report.
 ```
 
-The reviewer does not depend on the final brief — it only checks that the file exists and has content.
+The plan-validator does not depend on the final brief — it only checks that the file exists and has content.
 
 ## Step 6: Fact-Check Brief (one-time, after compression loop)
 
-After the compress-review loop (5A) passes and the DB reviewer (5B) passes, run a final claim-by-claim verification of the brief.
+After the compress-review loop (5A) passes and the plan-validator (5B) passes, run a final claim-by-claim verification of the brief.
 
-Spawn the **fact-checker** agent (model: **sonnet**) with this prompt:
+Spawn the **tech-brief-fact-checker** agent (model: **sonnet**) with this prompt:
 
 ```
 Verify every factual claim in the technical brief against the PRD.
@@ -133,11 +133,11 @@ Return your fact check report as specified in your instructions.
 **Handling the result:**
 
 - **PASS** → proceed to Step 8
-- **FAIL** → feed the errors back to the compressor as review feedback (same as a 5A.2 retry), then re-run the fact-checker once. If it still fails, present the remaining errors to the user in Step 8.
+- **FAIL** → feed the errors back to the tech-brief-compressor as review feedback (same as a 5A.2 retry), then re-run the tech-brief-fact-checker once. If it still fails, present the remaining errors to the user in Step 8.
 
 ## Step 7: Resolve Issues (you do this, if needed)
 
-If the DB reviewer (5B) or fact-checker (Step 6) found issues:
+If the plan-validator (5B) or tech-brief-fact-checker (Step 6) found issues:
 - Present the issues to the user
 - Decide whether to re-run agents for fixes, manually correct, or accept as-is
 - Re-verify if corrections were made
@@ -153,8 +153,8 @@ python3 scripts/plan-ops.py progress
 Then:
 - Show the summary stats to the user
 - Show the technical brief content (or a summary if the user prefers)
-- Present any flags or concerns from the analyzer
-- Note if the brief required compression iterations, fact-checker corrections, or any unresolved issues
+- Present any flags or concerns from the tech-brief-drafter
+- Note if the brief required compression iterations, tech-brief-fact-checker corrections, or any unresolved issues
 - Wait for user approval before moving to Phase 2
 
 **Do not proceed to Phase 2 until the user explicitly approves.**
