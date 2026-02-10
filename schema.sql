@@ -1,5 +1,5 @@
 -- Clyde plan.db schema
--- Canonical DDL for the plan database built during Phase 1 (analyze)
+-- Canonical DDL for the plan database built during the Intake Phase (analyze)
 
 PRAGMA foreign_keys = ON;
 

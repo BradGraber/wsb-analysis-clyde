@@ -4,12 +4,12 @@ Clyde is a reusable framework for Claude Code-driven software development. Clone
 
 ## Two-Phase Workflow
 
-### Phase 1: Analyze (`/analyze`)
+### Intake Phase (`/analyze`)
 - Run via the `/analyze` skill — one-time project initialization
 - Scans `input/`, builds `output/plan.db`, generates `output/technical-brief.md`
 - Review with user before proceeding
 
-### Phase 2: Implement
+### Implementation Phase
 - Orchestrator queries `output/plan.db` for next work item
 - Spawns implementer subagent with focused context (task + story + epic + technical brief)
 - Subagent builds in `project-workspace/src/`, returns results
@@ -30,8 +30,8 @@ Clyde is a reusable framework for Claude Code-driven software development. Clone
 - `project-workspace/` — The project workspace (source code in `src/`)
 - `.claude/rules/` — Clyde's permanent framework rules
 - `.claude/agents/` — Subagent definitions
-  - Phase 1 (analyze): tech-brief-drafter, tech-brief-compressor, tech-brief-reviewer, tech-brief-fact-checker, plan-validator, phase-extractor
-  - Phase 2 (implement): implementer, test-writer
+  - Intake (analyze): tech-brief-drafter, tech-brief-compressor, tech-brief-reviewer, tech-brief-fact-checker, plan-validator, phase-extractor
+  - Implementation: implementer, test-writer
 - `.claude/framework-manifest` — Lists framework-owned paths for `/update`
 
 ## Rules

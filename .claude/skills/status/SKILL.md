@@ -34,7 +34,7 @@ Check what exists to determine where the project stands:
 - **Both `output/plan.db` and `output/technical-brief.md` exist**:
   → Query the database for progress (see step 2).
 
-### 2. Query Progress (Phase 2 Active)
+### 2. Query Progress (Implementation Phase Active)
 
 Use `plan-ops.py` to gather project state — do NOT run raw SQL against plan.db. Run these commands:
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-plan-ops.py — Query and update plan.db during Phase 2 implementation.
+plan-ops.py — Query and update plan.db during the Implementation Phase.
 
 Zero external dependencies (Python 3 stdlib only).
-Provides subcommands for the Phase 2 orchestrator to find work,
+Provides subcommands for the Implementation Phase orchestrator to find work,
 gather context, and update progress without writing raw SQL.
 
 Usage:
@@ -33,7 +33,7 @@ def get_db(project_root):
     """Open plan.db with row_factory for dict-like access."""
     db_path = Path(project_root) / 'output' / 'plan.db'
     if not db_path.exists():
-        print(f'ERROR: {db_path} not found. Run Phase 1 first.', file=sys.stderr)
+        print(f'ERROR: {db_path} not found. Run the Intake Phase (/analyze) first.', file=sys.stderr)
         sys.exit(1)
     conn = sqlite3.connect(str(db_path))
     conn.execute('PRAGMA foreign_keys = ON')
@@ -50,7 +50,7 @@ def ensure_schema(conn):
     """Auto-migrate plan.db from older schema versions if needed.
 
     Detects missing skip_reason column on tasks as a proxy for the
-    Phase 2 quality gates schema update.  If absent, recreates epics,
+    Implementation Phase quality gates schema update.  If absent, recreates epics,
     stories, and tasks tables with updated CHECK constraints and the
     new skip_reason column.
     """
@@ -584,7 +584,7 @@ def cmd_list_skipped(conn, phase_id=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Phase 2 plan.db operations'
+        description='Implementation Phase plan.db operations'
     )
     parser.add_argument(
         '--project-root', default='.',

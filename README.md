@@ -69,7 +69,7 @@ input/
 
 Each epic, story, and task file uses YAML frontmatter for structured fields (id, dependencies, priority, etc.) with the markdown body providing the full description and acceptance criteria.
 
-### 6. Analyze (Phase 1)
+### 6. Analyze (Intake Phase)
 
 Launch with `./clyde` — it will show your project status and suggest running `/analyze`:
 
@@ -86,7 +86,7 @@ Claude will:
 
 Review the plan and technical brief before proceeding.
 
-### 7. Implement (Phase 2)
+### 7. Implement (Implementation Phase)
 
 Once you approve the analysis, tell Claude to implement:
 
@@ -117,19 +117,19 @@ my-project/
 ├── .claude/
 │   ├── settings.json               # Shared permission defaults (safe ops only)
 │   ├── rules/                      # Auto-loaded instruction files
-│   │   └── phase2-implement.md
+│   │   └── implementation-phase.md
 │   ├── agents/                     # Subagent definitions
-│   │   ├── tech-brief-drafter.md   #   Phase 1: drafts brief from PRD
-│   │   ├── tech-brief-compressor.md#   Phase 1: compresses brief to target length
-│   │   ├── tech-brief-reviewer.md  #   Phase 1: reviews brief for accuracy
-│   │   ├── tech-brief-fact-checker.md # Phase 1: claim-by-claim verification
-│   │   ├── plan-validator.md       #   Phase 1: validates plan.db integrity
-│   │   ├── phase-extractor.md      #   Phase 1: extracts phases from work-sequence
-│   │   ├── implementer.md          #   Phase 2: writes code for a single task
-│   │   └── test-writer.md         #   Phase 2: writes tests from acceptance criteria
+│   │   ├── tech-brief-drafter.md   #   Intake: drafts brief from PRD
+│   │   ├── tech-brief-compressor.md#   Intake: compresses brief to target length
+│   │   ├── tech-brief-reviewer.md  #   Intake: reviews brief for accuracy
+│   │   ├── tech-brief-fact-checker.md # Intake: claim-by-claim verification
+│   │   ├── plan-validator.md       #   Intake: validates plan.db integrity
+│   │   ├── phase-extractor.md      #   Intake: extracts phases from work-sequence
+│   │   ├── implementer.md          #   Implementation: writes code for a single task
+│   │   └── test-writer.md         #   Implementation: writes tests from acceptance criteria
 │   └── skills/                     # User-invocable skills
 │       ├── init/                   # One-time project initialization
-│       ├── analyze/                # Phase 1: build plan.db + technical brief
+│       ├── analyze/                # Intake: build plan.db + technical brief
 │       ├── update/                 # Pull framework updates from upstream
 │       ├── status/                 # Check project state, suggest next action
 │       ├── setup/                  # Configure local permissions
@@ -164,7 +164,7 @@ Skills are slash commands you can run inside Claude Code:
 | Skill | Description |
 |-------|-------------|
 | `/init` | One-time project setup — detach from Clyde remote, clean git history, prepare standalone project |
-| `/analyze` | Run Phase 1 — scan inputs, build `plan.db`, generate technical brief |
+| `/analyze` | Run the Intake Phase — scan inputs, build `plan.db`, generate technical brief |
 | `/status` | Check project state — shows progress, in-progress tasks, and suggests next action |
 | `/setup` | Configure local permissions — git access, file editing, sqlite |
 | `/update` | Pull latest framework files from upstream Clyde repo |

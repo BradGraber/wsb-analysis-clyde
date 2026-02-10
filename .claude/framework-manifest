@@ -9,7 +9,7 @@
 
 D .claude/agents
 D scripts
-F .claude/rules/phase2-implement.md
+F .claude/rules/implementation-phase.md
 F .claude/settings.json
 F .claude/skills/analyze/SKILL.md
 F .claude/skills/init/SKILL.md

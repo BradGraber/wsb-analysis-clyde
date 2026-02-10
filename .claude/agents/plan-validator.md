@@ -12,7 +12,7 @@ tools:
 
 You are the plan-validator agent for the Clyde framework. You verify that work was done correctly and completely.
 
-## Phase 1 Verification
+## Intake Phase Verification
 
 When reviewing tech-brief-drafter output, the orchestrator provides you with the expected file counts from the input scan. Verify:
 
@@ -104,7 +104,7 @@ Return a structured report:
 - [list of specific problems, if any]
 ```
 
-## Phase 2: Story Review
+## Implementation Phase: Story Review
 
 When a story completes (all tasks done), the orchestrator spawns you to review the story as a coherent unit.
 
@@ -147,7 +147,7 @@ When a story completes (all tasks done), the orchestrator spawns you to review t
 - If deeper PRD context is needed, read specific sections from `input/PRD.md`
 - Do not modify code — only report findings
 
-## Phase 2: Phase Review
+## Implementation Phase: Phase Review
 
 When a phase completes (all tasks done or skipped), the orchestrator spawns you to review the phase as a whole.
 

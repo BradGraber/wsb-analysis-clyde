@@ -12,7 +12,7 @@ Perform the following steps to cleanly wrap up the current session:
 Summarize what was accomplished in this session:
 - Decisions made
 - Files created or modified
-- Tasks completed (if in Phase 2)
+- Tasks completed (if in the Implementation Phase)
 - Problems encountered and how they were resolved
 
 ## 2. Project State Check
@@ -27,8 +27,8 @@ Run `python3 scripts/plan-ops.py progress` to get a full snapshot:
 **In-progress task note:** `next-task` only returns *pending* tasks, so any tasks left in `in_progress` status must be explicitly resumed by the next session. List them prominently in the report.
 
 ### If `output/plan.db` does NOT exist:
-- Phase 1 has not been run (or did not complete). Note this — no plan-ops.py calls.
-- Check if `output/technical-brief.md` exists — if plan.db is missing but the brief exists, something went wrong in Phase 1.
+- The Intake Phase has not been run (or did not complete). Note this — no plan-ops.py calls.
+- Check if `output/technical-brief.md` exists — if plan.db is missing but the brief exists, something went wrong during the Intake Phase.
 
 ## 3. Git Check
 Run `git status` to check for uncommitted changes.

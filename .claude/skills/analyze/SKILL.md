@@ -1,10 +1,10 @@
 ---
 name: analyze
-description: Analyze input files to build plan.db and technical brief (Phase 1)
+description: Analyze input files to build plan.db and technical brief (Intake Phase)
 user_invocable: true
 ---
 
-# Phase 1: Analyze
+# Intake Phase: Analyze
 
 Follow this orchestrator workflow. The main conversation stays lean — heavy work is delegated to subagents.
 
@@ -111,7 +111,7 @@ Read output/technical-brief.md and input/PRD.md, then return your assessment.
 Spawn the **plan-validator** agent (model: **sonnet**) with this prompt. Launch in parallel with 5A.
 
 ```
-Verify output/plan.db for Phase 1 completeness.
+Verify output/plan.db for Intake Phase completeness.
 Expected counts: {{X}} epics, {{Y}} stories, {{Z}} tasks.
 Run the checks specified in your instructions and return your report.
 ```
@@ -155,6 +155,6 @@ Then:
 - Show the technical brief content (or a summary if the user prefers)
 - Present any flags or concerns from the tech-brief-drafter
 - Note if the brief required compression iterations, tech-brief-fact-checker corrections, or any unresolved issues
-- Wait for user approval before moving to Phase 2
+- Wait for user approval before moving to the Implementation Phase
 
-**Do not proceed to Phase 2 until the user explicitly approves.**
+**Do not proceed to the Implementation Phase until the user explicitly approves.**
