@@ -289,42 +289,6 @@ def print_report(lines, counts):
 
 
 # ---------------------------------------------------------------------------
-# Schema migration check
-# ---------------------------------------------------------------------------
-
-def check_schema_migration(changed_paths):
-    """If schema.sql changed and plan.db exists, print migration warning."""
-    if "schema.sql" not in changed_paths:
-        return
-
-    plan_db = Path("output/plan.db")
-    if not plan_db.exists():
-        return
-
-    print()
-    print("⚠  schema.sql has changed and output/plan.db exists.")
-
-    # Check task progress
-    import sqlite3
-    conn = sqlite3.connect(str(plan_db))
-    rows = conn.execute("SELECT status, COUNT(*) as cnt FROM tasks GROUP BY status").fetchall()
-    conn.close()
-
-    status_counts = {row[0]: row[1] for row in rows}
-    has_progress = any(
-        status_counts.get(s, 0) > 0
-        for s in ("in_progress", "complete", "skipped")
-    )
-
-    if has_progress:
-        print("   Implementation work is in progress. plan.db may need manual migration.")
-        print("   Review the schema diff and apply changes carefully to preserve progress.")
-    else:
-        print("   No implementation work has started. You can safely re-run /analyze")
-        print("   after this update to rebuild plan.db with the new schema.")
-
-
-# ---------------------------------------------------------------------------
 # Restart check
 # ---------------------------------------------------------------------------
 
@@ -386,7 +350,6 @@ def cmd_diff():
         sys.exit(2)
 
     print_report(lines, counts)
-    check_schema_migration(changed_paths)
 
     if needs_restart(changed_paths):
         print()
@@ -427,8 +390,6 @@ def cmd_apply():
     print()
     print("When satisfied, commit with:")
     print('  git commit -m "Update framework from upstream Clyde"')
-
-    check_schema_migration(changed_paths)
 
     if needs_restart(changed_paths):
         print()
