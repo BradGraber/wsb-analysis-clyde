@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Clyde entry point — detects fresh clones and routes accordingly
+
+if [ -f ".claude/rules/init-gate.md" ] && [ ! -f ".claude/rules/dev-mode.md" ]; then
+    claude "/init"
+else
+    claude "/status"
+fi

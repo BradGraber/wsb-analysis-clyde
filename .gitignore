@@ -1,0 +1,15 @@
+# Claude Code local settings
+.claude/settings.local.json
+.claude/agent-memory-local/
+
+# Dev mode rule (only in framework dev repo, not project clones)
+.claude/rules/dev-mode.md
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
