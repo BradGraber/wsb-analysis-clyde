@@ -38,7 +38,110 @@ def get_db(project_root):
     conn = sqlite3.connect(str(db_path))
     conn.execute('PRAGMA foreign_keys = ON')
     conn.row_factory = sqlite3.Row
+    ensure_schema(conn)
     return conn
+
+
+# ---------------------------------------------------------------------------
+# Schema migration
+# ---------------------------------------------------------------------------
+
+def ensure_schema(conn):
+    """Auto-migrate plan.db from older schema versions if needed.
+
+    Detects missing skip_reason column on tasks as a proxy for the
+    Phase 2 quality gates schema update.  If absent, recreates epics,
+    stories, and tasks tables with updated CHECK constraints and the
+    new skip_reason column.
+    """
+    columns = conn.execute('PRAGMA table_info(tasks)').fetchall()
+    col_names = [col['name'] for col in columns]
+    if 'skip_reason' in col_names:
+        return  # Schema is current
+
+    print('Migrating plan.db schema (adding skipped status support)...',
+          file=sys.stderr)
+
+    conn.execute('PRAGMA foreign_keys = OFF')
+
+    try:
+        # -- Migrate epics --
+        conn.execute('ALTER TABLE epics RENAME TO _old_epics')
+        conn.execute(
+            'CREATE TABLE epics ('
+            '  id TEXT PRIMARY KEY,'
+            '  title TEXT NOT NULL,'
+            '  priority TEXT CHECK (priority IN (\'high\', \'medium\', \'low\')),'
+            '  description TEXT,'
+            '  status TEXT NOT NULL DEFAULT \'pending\''
+            '    CHECK (status IN (\'pending\', \'in_progress\', \'complete\', \'skipped\'))'
+            ')'
+        )
+        conn.execute(
+            'INSERT INTO epics (id, title, priority, description, status) '
+            'SELECT id, title, priority, description, status FROM _old_epics'
+        )
+        conn.execute('DROP TABLE _old_epics')
+
+        # -- Migrate stories --
+        conn.execute('ALTER TABLE stories RENAME TO _old_stories')
+        conn.execute(
+            'CREATE TABLE stories ('
+            '  id TEXT PRIMARY KEY,'
+            '  epic_id TEXT NOT NULL REFERENCES epics(id),'
+            '  title TEXT NOT NULL,'
+            '  priority TEXT CHECK (priority IN (\'high\', \'medium\', \'low\')),'
+            '  story_points TEXT,'
+            '  description TEXT,'
+            '  status TEXT NOT NULL DEFAULT \'pending\''
+            '    CHECK (status IN (\'pending\', \'in_progress\', \'complete\', \'skipped\'))'
+            ')'
+        )
+        conn.execute(
+            'INSERT INTO stories (id, epic_id, title, priority, story_points, description, status) '
+            'SELECT id, epic_id, title, priority, story_points, description, status FROM _old_stories'
+        )
+        conn.execute('DROP TABLE _old_stories')
+
+        # -- Migrate tasks --
+        conn.execute('ALTER TABLE tasks RENAME TO _old_tasks')
+        conn.execute(
+            'CREATE TABLE tasks ('
+            '  id TEXT PRIMARY KEY,'
+            '  story_id TEXT NOT NULL REFERENCES stories(id),'
+            '  epic_id TEXT NOT NULL REFERENCES epics(id),'
+            '  title TEXT NOT NULL,'
+            '  complexity INTEGER,'
+            '  description TEXT,'
+            '  acceptance_criteria TEXT,'
+            '  skip_reason TEXT,'
+            '  status TEXT NOT NULL DEFAULT \'pending\''
+            '    CHECK (status IN (\'pending\', \'in_progress\', \'complete\', \'skipped\'))'
+            ')'
+        )
+        conn.execute(
+            'INSERT INTO tasks (id, story_id, epic_id, title, complexity, '
+            '  description, acceptance_criteria, skip_reason, status) '
+            'SELECT id, story_id, epic_id, title, complexity, '
+            '  description, acceptance_criteria, NULL, status '
+            'FROM _old_tasks'
+        )
+        conn.execute('DROP TABLE _old_tasks')
+
+        # -- Recreate indexes on migrated tables --
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_stories_epic_id ON stories(epic_id)')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_tasks_story_id ON tasks(story_id)')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_tasks_epic_id ON tasks(epic_id)')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)')
+
+        conn.commit()
+        print('Migration complete.', file=sys.stderr)
+
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute('PRAGMA foreign_keys = ON')
 
 
 # ---------------------------------------------------------------------------

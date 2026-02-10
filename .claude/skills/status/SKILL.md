@@ -36,31 +36,20 @@ Check what exists to determine where the project stands:
 
 ### 2. Query Progress (Phase 2 Active)
 
-Read `schema.sql` to confirm table/column names, then run these queries against `output/plan.db`:
+Use `plan-ops.py` to gather project state — do NOT run raw SQL against plan.db. Run these commands:
 
-```sql
--- Overall counts by status
-SELECT status, COUNT(*) FROM epics GROUP BY status;
-SELECT status, COUNT(*) FROM stories GROUP BY status;
-SELECT status, COUNT(*) FROM tasks GROUP BY status;
+```bash
+# Overall progress — task/story/epic counts, in-progress items, phase summary
+python3 scripts/plan-ops.py progress
 
--- In-progress work (what was being worked on)
-SELECT id, title FROM tasks WHERE status = 'in_progress';
-SELECT id, title FROM stories WHERE status = 'in_progress';
+# Skipped tasks that need attention
+python3 scripts/plan-ops.py list-skipped
 
--- Skipped tasks (need attention)
-SELECT id, title, skip_reason FROM tasks WHERE status = 'skipped';
-
--- Phase progress (tasks per phase via phase_items → stories → tasks)
-SELECT p.sequence, p.name,
-  COUNT(CASE WHEN t.status = 'complete' THEN 1 END) AS done,
-  COUNT(t.id) AS total
-FROM phases p
-JOIN phase_items pi ON pi.phase_id = p.id AND pi.item_type = 'story'
-JOIN tasks t ON t.story_id = pi.item_id
-GROUP BY p.id
-ORDER BY p.sequence;
+# Next suggested action — find the next unblocked pending task
+python3 scripts/plan-ops.py next-task
 ```
+
+Use the output from these three commands to build the summary in step 3.
 
 ### 3. Present Summary
 
