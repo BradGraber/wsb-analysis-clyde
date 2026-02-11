@@ -177,15 +177,13 @@ def setup_oauth(token_path: str = DEFAULT_TOKEN_PATH) -> None:
         'grant_type': 'authorization_code',
         'code': auth_code,
         'redirect_uri': creds['redirect_uri'],
-        'client_id': creds['client_id'],
-        'client_secret': creds['client_secret']
     }
 
     try:
         response = requests.post(
             SCHWAB_TOKEN_URL,
             data=token_data,
-            headers={'Content-Type': 'application/x-www-form-urlencoded'}
+            auth=(creds['client_id'], creds['client_secret']),
         )
         response.raise_for_status()
         token_response = response.json()
@@ -343,15 +341,13 @@ def refresh_token(token_path: str = DEFAULT_TOKEN_PATH) -> Dict[str, str]:
     refresh_data = {
         'grant_type': 'refresh_token',
         'refresh_token': token['refresh_token'],
-        'client_id': creds['client_id'],
-        'client_secret': creds['client_secret']
     }
 
     try:
         response = requests.post(
             SCHWAB_TOKEN_URL,
             data=refresh_data,
-            headers={'Content-Type': 'application/x-www-form-urlencoded'}
+            auth=(creds['client_id'], creds['client_secret']),
         )
         response.raise_for_status()
         token_response = response.json()
@@ -507,7 +503,7 @@ class SchwabClient:
             SchwabAPIError: If quote fetch fails
             SchwabTokenExpiredError: If refresh token is expired
         """
-        url = f"https://api.schwabapi.com/marketdata/v1/quotes/{ticker}"
+        url = f"https://api.schwabapi.com/marketdata/v1/{ticker}/quotes"
 
         try:
             response = self._request('GET', url)

@@ -35,7 +35,7 @@ from src.api.responses import (
     VALIDATION_ERROR, DATABASE_ERROR, NOT_FOUND,
     ERROR_STATUS_CODES,
 )
-from src.api.routes import signals, positions, portfolios, runs, system
+from src.api.routes import signals, positions, portfolios, runs, system, auth
 from src.backend.db.connection import get_connection
 from src.backend.utils.logging_config import get_logger, setup_logging
 
@@ -115,6 +115,7 @@ app.include_router(portfolios.router)
 app.include_router(portfolios.evaluation_router)
 app.include_router(runs.router)
 app.include_router(system.router)
+app.include_router(auth.router)
 
 # Exception Handlers
 # These handlers convert exceptions to the standard ErrorEnvelope format

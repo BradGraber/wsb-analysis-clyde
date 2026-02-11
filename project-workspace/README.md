@@ -17,7 +17,15 @@ On Windows use `venv\Scripts\activate` instead of `source venv/bin/activate`.
 
 Remember to activate the venv (`source venv/bin/activate`) in any new terminal before running the API, tests, or scripts.
 
-### 2. Initialize the database
+### 2. Configure environment variables
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and fill in the credentials you need. See the [Environment Variables](#environment-variables) section below for details on each variable and when it's required.
+
+### 3. Initialize the database
 
 The database file is created automatically at `./data/wsb.db` on first API startup. To populate it with test data:
 
@@ -28,7 +36,7 @@ python scripts/seed_data.py
 
 This creates realistic mock data across all tables (signals, positions, portfolios, etc.). The script is idempotent -- safe to run multiple times.
 
-### 3. Start the API server
+### 4. Start the API server
 
 ```bash
 # From project-workspace/
@@ -37,7 +45,7 @@ uvicorn src.api.app:app --reload
 
 The API runs on `http://localhost:8000`. Interactive docs at `http://localhost:8000/docs`.
 
-### 4. Run the test suite
+### 5. Run the test suite
 
 ```bash
 # From project-workspace/
@@ -178,6 +186,7 @@ project-workspace/
         portfolios.py      # /portfolios and /evaluation-periods endpoints
         runs.py            # /runs endpoints
         system.py          # /prices and /status endpoints
+        auth.py            # /auth/schwab OAuth endpoints
     backend/
       db/
         schema.sql         # 16 table definitions
@@ -195,9 +204,107 @@ project-workspace/
   tests/                   # 209 behavioral tests
 ```
 
-## Configuration
+## Scripts
 
-| Env Variable | Default | Description |
-|-------------|---------|-------------|
+### `scripts/seed_data.py` -- Seed Development Data
+
+Populates the database with realistic mock data across all tables. Idempotent -- safe to run multiple times.
+
+```bash
+python scripts/seed_data.py
+```
+
+### Schwab OAuth Setup
+
+Two options for authenticating with Schwab. Both require `SCHWAB_CLIENT_ID`, `SCHWAB_CLIENT_SECRET`, and `SCHWAB_REDIRECT_URI` in your `.env`.
+
+**Option A: Web-based (recommended)** -- The server handles the callback automatically.
+
+1. Generate a self-signed certificate (one-time):
+
+```bash
+mkdir -p certs
+openssl req -x509 -newkey rsa:2048 -keyout certs/key.pem \
+  -out certs/cert.pem -days 365 -nodes -subj "/CN=127.0.0.1"
+```
+
+2. Set your redirect URI in `.env`:
+
+```
+SCHWAB_REDIRECT_URI=https://127.0.0.1:8000/auth/schwab/callback
+```
+
+Register this same URL in the Schwab Developer Portal.
+
+3. Start the server with HTTPS:
+
+```bash
+uvicorn src.api.app:app --reload --ssl-keyfile=./certs/key.pem --ssl-certfile=./certs/cert.pem
+```
+
+4. Visit `https://127.0.0.1:8000/auth/schwab/login` in your browser (accept the certificate warning). After granting consent, the server exchanges the code for tokens automatically.
+
+**Option B: CLI script** -- Manual paste flow.
+
+```bash
+python3 src/backend/scripts/schwab_setup.py
+```
+
+Opens your browser for OAuth consent. After granting access, copy the callback URL from the browser and paste it into the terminal.
+
+Access tokens refresh automatically (~30 min TTL). If the refresh token expires after 7 days of inactivity, re-authenticate using either method.
+
+### `src/backend/scripts/schwab_verify.py` -- Verify Schwab Connection
+
+Verifies that Schwab API credentials are working by fetching an AAPL stock quote and an AAPL options chain (14-21 DTE). Run this after `schwab_setup.py` to confirm everything is connected.
+
+```bash
+python3 src/backend/scripts/schwab_verify.py
+```
+
+### `src/backend/scripts/validate_schema.py` -- Validate DB Schema
+
+Checks that the SQLite database schema matches the expected table definitions.
+
+```bash
+python3 src/backend/scripts/validate_schema.py
+```
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and fill in the values you need. Not all variables are required immediately -- each group is needed when its corresponding feature is used.
+
+### Reddit API (Phase B: Data Pipeline)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `REDDIT_CLIENT_ID` | Yes | OAuth2 client ID from your Reddit app |
+| `REDDIT_CLIENT_SECRET` | Yes | OAuth2 secret from your Reddit app |
+| `REDDIT_USER_AGENT` | Yes | User agent string (e.g. `wsb-analysis/1.0`) |
+
+Create a Reddit "script" app at https://www.reddit.com/prefs/apps to get these credentials.
+
+### OpenAI API (Phase C: AI Analysis)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OPENAI_API_KEY` | Yes | API key for GPT-4o-mini analysis calls |
+
+Get your key at https://platform.openai.com/api-keys. Monthly spend is tracked; the system warns above $60/month.
+
+### Schwab API (Price Data)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SCHWAB_CLIENT_ID` | Yes | OAuth2 client ID from Schwab Developer Portal |
+| `SCHWAB_CLIENT_SECRET` | Yes | OAuth2 client secret |
+| `SCHWAB_REDIRECT_URI` | Yes | Callback URL (default: `https://127.0.0.1:8000/auth/schwab/callback`) |
+
+Register at https://developer.schwab.com. See [Schwab OAuth Setup](#schwab-oauth-setup) for authentication options. Tokens are stored in `data/schwab_token.json` (git-ignored).
+
+### Application Settings (Optional)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `DB_PATH` | `./data/wsb.db` | SQLite database file path |
 | `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated allowed origins |

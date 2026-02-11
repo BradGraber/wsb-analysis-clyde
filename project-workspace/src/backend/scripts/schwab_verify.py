@@ -60,10 +60,12 @@ def verify_stock_quote(client: SchwabClient, ticker: str = "AAPL") -> dict:
         ticker_data = quote_data[ticker]
         logger.info(f"  Ticker data keys: {list(ticker_data.keys())}")
 
-        # Log some key quote fields if present
-        for field in ['lastPrice', 'bidPrice', 'askPrice', 'mark', 'highPrice', 'lowPrice', 'openPrice', 'closePrice']:
-            if field in ticker_data:
-                logger.info(f"  {field}: {ticker_data[field]}")
+        # Quote fields are nested under the "quote" key per API spec
+        quote = ticker_data.get('quote', {})
+        if quote:
+            for field in ['lastPrice', 'bidPrice', 'askPrice', 'mark', 'highPrice', 'lowPrice', 'openPrice', 'closePrice']:
+                if field in quote:
+                    logger.info(f"  {field}: {quote[field]}")
 
     return quote_data
 
@@ -102,7 +104,7 @@ def verify_options_chain(
         ticker,
         dte_min=dte_min,
         dte_max=dte_max,
-        includeQuotes=True,
+        includeUnderlyingQuote=True,
         strategy='ANALYTICAL'  # Required for greeks
     )
 
