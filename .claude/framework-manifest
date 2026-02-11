@@ -22,6 +22,7 @@ F .claude/skills/update/SKILL.md
 F .claude/skills/logs/SKILL.md
 F .claude/skills/resume/SKILL.md
 F .claude/skills/docs/SKILL.md
+F .claude/skills/validate/SKILL.md
 F .claude/framework-manifest
 F schema.sql
 F CLAUDE.md

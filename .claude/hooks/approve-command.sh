@@ -8,6 +8,24 @@
 
 set -euo pipefail
 
+# --- Decision logging ---
+# Appends to output/logs/hook-decisions.jsonl when logging is enabled.
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-.}"
+log_decision() {
+    local cmd="$1" decision="$2" reason="$3"
+    [ -f "$PROJECT_DIR/output/logs/.enabled" ] || return 0
+    local ts
+    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    jq -n -c \
+      --arg ts "$ts" \
+      --arg hook "approve-command" \
+      --arg command "$cmd" \
+      --arg decision "$decision" \
+      --arg reason "$reason" \
+      '{ts: $ts, hook: $hook, command: $command, decision: $decision, reason: $reason}' \
+      >> "$PROJECT_DIR/output/logs/hook-decisions.jsonl" 2>/dev/null || true
+}
+
 # Read JSON input
 INPUT=$(cat) || exit 0
 
@@ -31,6 +49,7 @@ DENY_PATTERNS=(
 
 for pattern in "${DENY_PATTERNS[@]}"; do
     if [[ "$COMMAND" == *"$pattern"* ]]; then
+        log_decision "$COMMAND" "ask" "Contains '$pattern'"
         echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"Command contains '"'$pattern'"' — review before approving"}}'
         exit 0
     fi
@@ -46,9 +65,11 @@ elif [[ "$COMMAND" == *"git reset"* ]] && [[ "$COMMAND" == *"--hard"* ]]; then
 fi
 
 if [ -n "$ask_reason" ]; then
+    log_decision "$COMMAND" "ask" "$ask_reason"
     echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"Command contains '"'$ask_reason'"' — review before approving"}}'
     exit 0
 fi
 
 # No deny pattern matched — auto-approve
+log_decision "$COMMAND" "allow" ""
 echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'

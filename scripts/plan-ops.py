@@ -34,7 +34,35 @@ import argparse
 import json
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# Event logging
+# ---------------------------------------------------------------------------
+
+_project_root = None  # Set once in CLI handler
+
+
+def emit_event(event_type, data):
+    """Append a structured event to output/logs/events.jsonl (fire-and-forget)."""
+    try:
+        if _project_root is None:
+            return
+        root = Path(_project_root)
+        if not (root / 'output' / 'logs' / '.enabled').exists():
+            return
+        entry = {
+            'ts': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'event': event_type,
+            **data,
+        }
+        log_path = root / 'output' / 'logs' / 'events.jsonl'
+        with open(log_path, 'a') as f:
+            f.write(json.dumps(entry) + '\n')
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -455,6 +483,13 @@ def cmd_start_task(conn, task_id):
 
     conn.commit()
 
+    emit_event('task_started', {
+        'task_id': task_id,
+        'story_id': task['story_id'],
+        'epic_id': task['epic_id'],
+        'phase_id': phase_row['phase_id'] if phase_row else None,
+    })
+
     print(f'Started: {task_id} — {task["title"]}')
     story_status = conn.execute(
         'SELECT status FROM stories WHERE id = ?', (task['story_id'],)
@@ -523,6 +558,13 @@ def cmd_complete_task(conn, task_id, files=None, output_json=False):
             epic_completed = True
 
     conn.commit()
+
+    emit_event('task_completed', {
+        'task_id': task_id,
+        'files': files or [],
+        'story_completed': story_completed,
+        'epic_completed': epic_completed,
+    })
 
     if output_json:
         result = {
@@ -643,6 +685,7 @@ def cmd_batch_check(project_root, reset=False, budget=8):
 
     if reset:
         counter_file.write_text('0')
+        emit_event('batch_check', {'batch': 0, 'budget': budget, 'stop': False, 'reset': True})
         print(json.dumps({'batch': 0, 'budget': budget, 'stop': False}))
         return
 
@@ -656,10 +699,13 @@ def cmd_batch_check(project_root, reset=False, budget=8):
     new_count = current + 1
     counter_file.write_text(str(new_count))
 
+    stop = new_count >= budget
+    emit_event('batch_check', {'batch': new_count, 'budget': budget, 'stop': stop, 'reset': False})
+
     print(json.dumps({
         'batch': new_count,
         'budget': budget,
-        'stop': new_count >= budget
+        'stop': stop
     }))
 
 
@@ -749,6 +795,8 @@ def cmd_skip_task(conn, task_id, reason):
     )
     conn.commit()
 
+    emit_event('task_skipped', {'task_id': task_id, 'reason': reason})
+
     print(f'Skipped: {task_id} — {task["title"]}')
     print(f'  Reason: {reason}')
 
@@ -773,6 +821,8 @@ def cmd_retry_task(conn, task_id):
         (task_id,)
     )
     conn.commit()
+
+    emit_event('task_retried', {'task_id': task_id})
 
     print(f'Reset to pending: {task_id} — {task["title"]}')
 
@@ -1101,6 +1151,9 @@ def cmd_update_phase(conn, phase_id, status):
         'UPDATE phases SET status = ? WHERE id = ?', (status, phase_id)
     )
     conn.commit()
+
+    emit_event('phase_updated', {'phase_id': phase_id, 'status': status})
+
     print(f'Phase {phase_id} ({phase["name"]}): status → {status}')
 
 
@@ -1144,6 +1197,9 @@ def cmd_update_story_gate(conn, story_id, status):
         'UPDATE stories SET gate_status = ? WHERE id = ?', (status, story_id)
     )
     conn.commit()
+
+    emit_event('story_gate_updated', {'story_id': story_id, 'status': status})
+
     print(f'Story {story_id} ({story["title"]}): gate_status → {status}')
 
 
@@ -1245,6 +1301,8 @@ if __name__ == '__main__':
                          help='Batch budget (default: 8)')
 
     args = parser.parse_args()
+
+    _project_root = args.project_root  # noqa: F841 — used by emit_event()
 
     # Commands that don't need a DB connection
     if args.command == 'list-docs':
