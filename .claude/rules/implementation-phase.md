@@ -134,22 +134,23 @@ plan-ops.py start-task TASK_ID
 
 Spawn **one implementer subagent per task** (model: **sonnet**), all in a **single message** (parallel Task calls). Each receives its own task context JSON + `output/technical-brief.md`.
 
-All implementers return structured reports independently with status (COMPLETE / BLOCKED / PARTIAL), files changed, acceptance criteria check, and concerns.
+All implementers return a JSON report with: `status` (COMPLETE / BLOCKED / PARTIAL), `files_changed` (array), `criteria` (array with `met` boolean), `concerns` (array with `level`: blocker/warning/info), and `blocked_reason`.
 
 ### 6. Evaluate Results
 
-Process each implementer's result and sort into three lists:
+Parse each implementer's JSON report and route on the `status` field:
 
-- **completed**: COMPLETE status — verify the files-changed list is non-empty and each acceptance criterion is addressed. If concerns are listed, note them but proceed unless they indicate a real problem.
-- **skipped**: BLOCKED status — run `plan-ops.py skip-task TASK_ID --reason "<reason>"` immediately for each.
-- **retry**: PARTIAL status — needs one retry attempt.
+- **`"COMPLETE"`**: Check `files_changed` is non-empty and `all(c.met for c in criteria)`. If any concern has `level: "blocker"` → treat as PARTIAL (retry). Otherwise → add to **completed** list. Log any `warning` concerns.
+- **`"BLOCKED"`**: Run `plan-ops.py skip-task TASK_ID --reason "<blocked_reason>"` immediately.
+- **`"PARTIAL"`**: Add to **retry** list.
 
 #### 6a. Handle Retries
 
-For each PARTIAL task, re-spawn the implementer **sequentially** (not in parallel — retries include the previous result as feedback). After retry:
+For each PARTIAL task, re-spawn the implementer **sequentially** (not in parallel — retries include the previous JSON report as feedback). After retry, parse the new JSON:
 
-- COMPLETE or PARTIAL-but-deferrable → add to completed list
-- Still BLOCKED or PARTIAL on core criteria → run `skip-task`
+- `status == "COMPLETE"` and no blocker concerns → add to completed list
+- `status == "PARTIAL"` but all unmet criteria are deferrable → add to completed list
+- Otherwise → run `skip-task` with the `blocked_reason` or a summary of unmet criteria
 
 **Never retry more than once per task.** Diminishing returns waste context.
 
@@ -158,10 +159,10 @@ For each PARTIAL task, re-spawn the implementer **sequentially** (not in paralle
 Process the completed list **sequentially**:
 
 ```bash
-plan-ops.py complete-task TASK_ID --files <files from implementer report> --json
+plan-ops.py complete-task TASK_ID --files <files_changed array from JSON report> --json
 ```
 
-The `--files` flag records which files this task changed. The `--json` flag returns structured output — check the `story_completed` field. When a story completes, its `gate_status` is automatically set to `'pending'`.
+The `--files` flag records which files this task changed (taken directly from the implementer's `files_changed` array). The `--json` flag returns structured output — check the `story_completed` field. When a story completes, its `gate_status` is automatically set to `'pending'`.
 
 Collect any tasks where `story_completed` is true into a **gates list**.
 
@@ -241,7 +242,7 @@ python3 scripts/plan-ops.py update-phase PHASE_ID --status complete
   - Clarify requirements and retry
   - Defer to a later phase
   - Accept the skip — run `plan-ops.py complete-task TASK_ID` to mark it done and trigger cascade
-- **PARTIAL retries**: Maximum one retry per task. The retry includes the original context plus the partial report from the first attempt.
+- **PARTIAL retries**: Maximum one retry per task. The retry includes the original context plus the JSON report from the first attempt.
 - **Story review failures**: Present to user — do not auto-fix. The user decides whether to spawn a targeted fix or defer.
 - **Undeclared dependencies**: If an implementer reports needing code from a task not listed as a dependency, note it as a discovered dependency. Skip the task and present at the phase boundary. Do not modify plan.db dependencies automatically.
 

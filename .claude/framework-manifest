@@ -8,6 +8,7 @@
 # __pycache__/ directories are always excluded from directory syncs.
 
 D .claude/agents
+D .claude/hooks
 D scripts
 F .claude/rules/implementation-phase.md
 F .claude/settings.json
@@ -17,6 +18,7 @@ F .claude/skills/setup/SKILL.md
 F .claude/skills/status/SKILL.md
 F .claude/skills/end-session/SKILL.md
 F .claude/skills/update/SKILL.md
+F .claude/skills/logs/SKILL.md
 F .claude/framework-manifest
 F schema.sql
 F CLAUDE.md

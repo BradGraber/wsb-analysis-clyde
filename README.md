@@ -98,7 +98,7 @@ Once you approve the analysis, tell Claude to implement:
 Claude works through one phase at a time using a **test-first, gate-checked** execution loop:
 
 1. **Write tests** — A test-writer agent generates failing tests from the phase's acceptance criteria before any code is written
-2. **Execute tasks** — For each task (in dependency order), the orchestrator spawns a focused implementer subagent with just the context it needs. The implementer returns a structured report (COMPLETE / BLOCKED / PARTIAL) with files changed and acceptance criteria checks.
+2. **Execute tasks** — For each task (in dependency order), the orchestrator spawns a focused implementer subagent with just the context it needs. The implementer returns a JSON report with status (COMPLETE / BLOCKED / PARTIAL), files changed, per-criterion verification, and categorized concerns.
 3. **Story gates** — When all tasks in a story complete, tests run and a plan-validator reviews the implementation against the story's acceptance criteria. Failures are presented to you — not auto-fixed.
 4. **Phase gate** — When the phase is done, the full test suite runs, skipped tasks are reviewed, and the plan-validator checks exit criteria. You approve before the next phase begins.
 
@@ -131,12 +131,16 @@ my-project/
 │   │   ├── phase-extractor.md      #   Intake: extracts phases from work-sequence
 │   │   ├── implementer.md          #   Implementation: writes code for a single task
 │   │   └── test-writer.md         #   Implementation: writes tests from acceptance criteria
+│   ├── hooks/                      # Hook scripts (logging)
+│   │   ├── log-subagent.sh         #   Copies subagent transcripts on completion
+│   │   └── log-orchestrator.sh     #   Logs orchestrator tool calls + sessions
 │   └── skills/                     # User-invocable skills
 │       ├── init/                   # One-time project initialization
 │       ├── analyze/                # Intake: build plan.db + technical brief
 │       ├── update/                 # Pull framework updates from upstream
 │       ├── status/                 # Check project state, suggest next action
 │       ├── setup/                  # Configure local permissions
+│       ├── logs/                   # Manage implementation phase logging
 │       └── end-session/            # Wrap up session, update memory
 ├── input/                          # Your project plan (READ ONLY)
 ├── output/                         # Generated artifacts (gitignored)
@@ -172,6 +176,7 @@ Skills are slash commands you can run inside Claude Code:
 | `/status` | Check project state — shows progress, in-progress tasks, and suggests next action |
 | `/setup` | Configure local permissions — git access, file editing, sqlite |
 | `/update` | Pull latest framework files from upstream Clyde repo |
+| `/logs` | Manage implementation phase logging — on/off/clear/status |
 | `/end-session` | Wrap up the session — update memory, summarize progress, note open items |
 
 ## Updating the Framework

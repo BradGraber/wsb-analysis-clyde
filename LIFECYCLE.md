@@ -239,34 +239,42 @@ Spawn **one implementer agent** (sonnet) per task, all in a **single message** (
 - Its own task context JSON from Step 4
 - `output/technical-brief.md`
 
-Each implementer reads the technical brief, reviews existing code in `project-workspace/`, writes code in `project-workspace/src/`, and returns a **structured report**:
+Each implementer reads the technical brief, reviews existing code in `project-workspace/`, writes code in `project-workspace/src/`, and returns a **JSON report**:
 
+```json
+{
+  "status": "COMPLETE",
+  "files_changed": ["project-workspace/src/path/to/file.py"],
+  "criteria": [
+    {"criterion": "description", "met": true, "evidence": "how it was met"}
+  ],
+  "concerns": [
+    {"level": "warning", "text": "description of concern"}
+  ],
+  "blocked_reason": null
+}
 ```
-### Status: COMPLETE / BLOCKED / PARTIAL
 
-### Files Changed
-- [each file created or modified]
-
-### Acceptance Criteria Check
-- [for each criterion: met or not met, and how]
-
-### Concerns
-- [issues, assumptions, deviations, or what's needed if blocked]
-```
+- `status`: `COMPLETE`, `BLOCKED`, or `PARTIAL`
+- `files_changed`: relative paths for every file created or modified
+- `criteria`: one entry per acceptance criterion with a `met` boolean
+- `concerns`: array with explicit `level` — `blocker` (prevents completion), `warning` (proceed but flag), or `info` (informational)
+- `blocked_reason`: what's needed to unblock (only when BLOCKED)
 
 ### Step 6: Evaluate Results
 
-Process each implementer's result and sort into three lists:
+Parse each implementer's JSON report and route on the `status` field:
 
-- **completed** — COMPLETE status: files-changed list is non-empty, all acceptance criteria addressed. Concerns are noted but don't block.
-- **skipped** — BLOCKED status: the task cannot proceed. Skip immediately: `plan-ops.py skip-task TASK_ID --reason "..."`.
-- **retry** — PARTIAL status: some criteria met, others not. Needs one retry attempt.
+- **`"COMPLETE"`** — check `files_changed` is non-empty and `all(c.met for c in criteria)`. If any concern has `level: "blocker"` → treat as PARTIAL (retry). Otherwise → add to **completed** list. Log any `warning` concerns.
+- **`"BLOCKED"`** — skip immediately: `plan-ops.py skip-task TASK_ID --reason "<blocked_reason>"`.
+- **`"PARTIAL"`** — add to **retry** list.
 
 #### Step 6a: Handle Retries
 
-For each PARTIAL task, re-spawn the implementer **sequentially** (not in parallel — retries include the previous result as feedback). After retry:
-- COMPLETE or PARTIAL-but-deferrable → add to completed list
-- Still BLOCKED or PARTIAL on core criteria → skip the task
+For each PARTIAL task, re-spawn the implementer **sequentially** (not in parallel — retries include the previous JSON report as feedback). After retry, parse the new JSON:
+- `status == "COMPLETE"` and no blocker concerns → add to completed list
+- `status == "PARTIAL"` but all unmet criteria are deferrable → add to completed list
+- Otherwise → skip the task with the `blocked_reason` or a summary of unmet criteria
 
 **Never retry more than once per task.** Diminishing returns waste context.
 
@@ -377,7 +385,7 @@ Tasks are skipped when the implementer returns BLOCKED or when a PARTIAL retry f
 
 ### Partial Retries
 
-Maximum one retry per task. The retry includes the original context plus the partial report from the first attempt, so the implementer can build on what was already done.
+Maximum one retry per task. The retry includes the original context plus the JSON report from the first attempt, so the implementer can build on what was already done.
 
 ### Story Review Failures
 
@@ -520,6 +528,24 @@ Wraps up the current session:
 4. Updates memory files
 5. Lists open items for next session
 
+### `/logs`
+
+Manages implementation phase logging. Logging captures subagent transcripts and orchestrator tool calls for debugging and prompt improvement. Off by default — opt in per project.
+
+```
+> /logs           # Show status (on/off, file count, size)
+> /logs on        # Enable logging
+> /logs off       # Disable logging (preserves existing logs)
+> /logs clear     # Delete log files
+```
+
+When enabled, hook scripts in `.claude/hooks/` capture:
+- **Subagent transcripts** (`SubagentStop` hook) — full JSONL copy of each subagent's conversation, saved as individual files in `output/logs/`
+- **Orchestrator tool calls** (`PostToolUse`/`PostToolUseFailure` hooks) — every `Bash` and `Task` call with input and response, appended to `output/logs/orchestrator.jsonl`
+- **Session boundaries** (`SessionStart`/`SessionEnd` hooks) — markers in `orchestrator.jsonl`
+
+Logs are stored in `output/logs/` (gitignored). A flag file `output/logs/.enabled` controls whether the hooks write anything — no flag means zero overhead.
+
 ### `/update`
 
 Pulls framework updates from the upstream `clyde` remote:
@@ -540,7 +566,7 @@ Pulls framework updates from the upstream `clyde` remote:
 | tech-brief-reviewer | Intake | sonnet | Reviews brief for accuracy, completeness, length, and inferences |
 | tech-brief-fact-checker | Intake | sonnet | Claim-by-claim verification of brief against PRD using Grep |
 | test-writer | Implementation | sonnet | Writes failing tests from acceptance criteria before implementation |
-| implementer | Implementation | sonnet | Writes code for a single task, returns structured report |
+| implementer | Implementation | sonnet | Writes code for a single task, returns JSON report |
 | plan-validator | Implementation | sonnet | Reviews implementation at story and phase gates |
 
 ---
@@ -553,3 +579,4 @@ Pulls framework updates from the upstream `clyde` remote:
 | `scripts/insert-phases.py` | Inserts phase JSON (from phase-extractor) into plan.db |
 | `scripts/plan-ops.py` | All runtime queries and updates against plan.db (15+ subcommands) |
 | `scripts/update-framework.py` | Diff and apply framework updates from the clyde remote |
+| `scripts/manage-logs.sh` | Enable, disable, clear, or check status of implementation phase logging |
