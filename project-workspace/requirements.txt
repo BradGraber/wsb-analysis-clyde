@@ -1,0 +1,16 @@
+# WSB Analysis Tool - Python Dependencies
+# Phase A (Foundation) dependencies
+
+# HTTP client (Schwab API)
+requests>=2.32.0
+
+# Logging
+structlog>=25.5.0
+
+# Web Framework & ASGI Server
+fastapi>=0.115.0
+uvicorn>=0.32.0
+
+# Testing
+pytest>=9.0.0
+pytest-anyio>=4.12.0
