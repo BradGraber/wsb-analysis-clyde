@@ -106,6 +106,29 @@ Tasks that can't be completed are **skipped with a reason** and surfaced at phas
 
 You can also target a specific task, story, or epic instead of a full phase. See [LIFECYCLE.md](LIFECYCLE.md) for the complete step-by-step reference.
 
+## Security and Environment
+
+### Command Auto-Approval
+
+Clyde auto-approves safe Bash commands during implementation to avoid constant permission prompts. A PreToolUse hook (`.claude/hooks/approve-command.sh`) inspects every Bash command before execution:
+
+- **Safe commands** (build tools, test runners, git operations, file inspection) execute without prompting
+- **Dangerous commands** trigger a user prompt before executing — you can approve or deny each one
+
+The deny list covers: recursive deletes (`rm -rf`), superuser commands (`sudo`), destructive git operations (`push --force`, `reset --hard`, `clean -f`, `checkout .`, `restore .`, `branch -D`). You can customize the deny list by editing the hook script.
+
+If the hook fails to run (missing `jq`, script error), Claude Code falls back to its normal permission system using the patterns in `.claude/settings.json`.
+
+### Recommended Environment
+
+Clyde gives an AI agent broad control over your shell. While the deny list blocks obviously destructive commands, AI-generated code can still make mistakes. Run Clyde in an environment where malfunctions have limited impact:
+
+- **Docker container** dedicated to the Claude Code session (best isolation)
+- **VM or dev container** — VS Code devcontainers, GitHub Codespaces, or similar
+- **Dedicated user account** without access to sensitive data outside the project directory
+
+Avoid running Clyde on a machine with production credentials, SSH keys to critical infrastructure, or irreplaceable data that isn't backed up. The `project-workspace/` directory is where all generated code lives — treat everything else on the system as potentially at risk from AI errors.
+
 ## Directory Structure
 
 ```
@@ -131,9 +154,12 @@ my-project/
 │   │   ├── phase-extractor.md      #   Intake: extracts phases from work-sequence
 │   │   ├── implementer.md          #   Implementation: writes code for a single task
 │   │   └── test-writer.md         #   Implementation: writes tests from acceptance criteria
-│   ├── hooks/                      # Hook scripts (logging)
-│   │   ├── log-subagent.sh         #   Copies subagent transcripts on completion
-│   │   └── log-orchestrator.sh     #   Logs orchestrator tool calls + sessions
+│   ├── hooks/                      # Hook scripts
+│   │   ├── approve-command.sh      #   PreToolUse: auto-approve safe Bash, prompt for dangerous
+│   │   ├── cleanup-processes.sh    #   SubagentStop/SessionEnd: kill tracked background PIDs
+│   │   ├── pre-compact.sh          #   PreCompact: re-inject implementation state before compaction
+│   │   ├── log-subagent.sh         #   SubagentStop: copy subagent transcripts
+│   │   └── log-orchestrator.sh     #   PostToolUse/Session: log orchestrator tool calls
 │   └── skills/                     # User-invocable skills
 │       ├── init/                   # One-time project initialization
 │       ├── analyze/                # Intake: build plan.db + technical brief

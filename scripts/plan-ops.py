@@ -18,12 +18,16 @@ Usage:
   python3 scripts/plan-ops.py story-files STORY_ID
   python3 scripts/plan-ops.py phase-files PHASE_ID
   python3 scripts/plan-ops.py phase-stories PHASE_ID
+  python3 scripts/plan-ops.py phase-tasks PHASE_ID
   python3 scripts/plan-ops.py progress
   python3 scripts/plan-ops.py phase-status PHASE_ID
   python3 scripts/plan-ops.py verify-intake --expected-epics N --expected-stories N --expected-tasks N
   python3 scripts/plan-ops.py resume-phase PHASE_ID
   python3 scripts/plan-ops.py update-phase PHASE_ID --status STATUS
   python3 scripts/plan-ops.py update-story-gate STORY_ID --status STATUS
+  python3 scripts/plan-ops.py active-phase
+  python3 scripts/plan-ops.py list-docs
+  python3 scripts/plan-ops.py batch-check [--reset] [--budget N]
 """
 
 import argparse
@@ -632,6 +636,50 @@ def cmd_progress(conn):
             print(f'  {p["id"]}: {p["name"]} [{p["status"]}] — {complete}/{total} tasks ({pct}%)')
 
 
+def cmd_batch_check(project_root, reset=False, budget=8):
+    """Manage the session batch counter (file-based, no DB needed)."""
+    counter_file = Path(project_root) / 'output' / '.session-batch-count'
+    counter_file.parent.mkdir(parents=True, exist_ok=True)
+
+    if reset:
+        counter_file.write_text('0')
+        print(json.dumps({'batch': 0, 'budget': budget, 'stop': False}))
+        return
+
+    # Read current count
+    try:
+        current = int(counter_file.read_text().strip())
+    except (FileNotFoundError, ValueError):
+        current = 0
+
+    # Increment and write back
+    new_count = current + 1
+    counter_file.write_text(str(new_count))
+
+    print(json.dumps({
+        'batch': new_count,
+        'budget': budget,
+        'stop': new_count >= budget
+    }))
+
+
+def cmd_active_phase(conn):
+    """Find the currently active phase (in_progress, tests_written, or gate_pending)."""
+    phase = conn.execute(
+        "SELECT id, name, status FROM phases "
+        "WHERE status IN ('in_progress', 'tests_written', 'gate_pending') "
+        "ORDER BY sequence LIMIT 1"
+    ).fetchone()
+    if phase:
+        print(json.dumps({
+            'phase_id': phase['id'],
+            'status': phase['status'],
+            'name': phase['name']
+        }))
+    else:
+        print(json.dumps({'phase_id': None}))
+
+
 def cmd_phase_status(conn, phase_id):
     """Show progress for a phase."""
     phase = conn.execute(
@@ -819,6 +867,23 @@ def cmd_phase_stories(conn, phase_id):
     ).fetchall()
     result = [{'id': s['id'], 'title': s['title'], 'description': s['description']}
               for s in stories]
+    print(json.dumps(result, indent=2))
+
+
+def cmd_phase_tasks(conn, phase_id):
+    """Return all tasks in a phase with descriptions and acceptance criteria."""
+    tasks = conn.execute(
+        'SELECT DISTINCT t.id, t.title, t.story_id, t.description, '
+        't.acceptance_criteria, t.complexity '
+        'FROM tasks t '
+        'JOIN phase_items pi ON '
+        '  (pi.item_type = \'story\' AND pi.item_id = t.story_id) '
+        '  OR (pi.item_type = \'epic\' AND pi.item_id = t.epic_id) '
+        'WHERE pi.phase_id = ? '
+        'ORDER BY t.id',
+        (phase_id,)
+    ).fetchall()
+    result = [dict(t) for t in tasks]
     print(json.dumps(result, indent=2))
 
 
@@ -1039,6 +1104,27 @@ def cmd_update_phase(conn, phase_id, status):
     print(f'Phase {phase_id} ({phase["name"]}): status → {status}')
 
 
+def cmd_list_docs(project_root):
+    """List available reference documentation from docs/ and input/docs/."""
+    root = Path(project_root)
+    framework_dir = root / 'docs'
+    project_dir = root / 'input' / 'docs'
+    framework_docs = sorted(framework_dir.iterdir()) if framework_dir.is_dir() else []
+    project_docs = sorted(project_dir.iterdir()) if project_dir.is_dir() else []
+
+    # Filter to .md files, exclude .gitkeep
+    framework = [f.name for f in framework_docs if f.suffix == '.md' and f.name != '.gitkeep']
+    project = [f.name for f in project_docs if f.suffix == '.md' and f.name != '.gitkeep']
+
+    result = {
+        'framework_docs': framework,
+        'project_docs': project,
+        'all_docs': framework + project,
+        'count': len(framework) + len(project),
+    }
+    print(json.dumps(result, indent=2))
+
+
 def cmd_update_story_gate(conn, story_id, status):
     """Update story gate review status."""
     valid = ('pending', 'passed', 'failed')
@@ -1070,8 +1156,8 @@ if __name__ == '__main__':
         description='Clyde plan.db operations (intake verification + implementation phase)'
     )
     parser.add_argument(
-        '--project-root', default='.',
-        help='Project root directory (default: cwd)'
+        '--project-root', default=str(Path(__file__).resolve().parent.parent),
+        help='Project root directory (default: derived from script location)'
     )
 
     sub = parser.add_subparsers(dest='command')
@@ -1121,6 +1207,10 @@ if __name__ == '__main__':
     p_phase_stories = sub.add_parser('phase-stories', help='List stories in a phase')
     p_phase_stories.add_argument('phase_id', help='Phase ID')
 
+    p_phase_tasks = sub.add_parser('phase-tasks',
+                                   help='List tasks in a phase with descriptions')
+    p_phase_tasks.add_argument('phase_id', help='Phase ID')
+
     p_verify = sub.add_parser('verify-intake', help='Verify plan.db after intake')
     p_verify.add_argument('--expected-epics', type=int, required=True)
     p_verify.add_argument('--expected-stories', type=int, required=True)
@@ -1142,7 +1232,28 @@ if __name__ == '__main__':
                          choices=['pending', 'passed', 'failed'],
                          help='Gate review result')
 
+    sub.add_parser('active-phase', help='Find the currently active phase (JSON)')
+
+    sub.add_parser('list-docs',
+                   help='List available reference docs from docs/ and input/docs/ (JSON)')
+
+    p_batch = sub.add_parser('batch-check',
+                             help='Increment batch counter and check budget (JSON)')
+    p_batch.add_argument('--reset', action='store_true',
+                         help='Reset counter to 0 instead of incrementing')
+    p_batch.add_argument('--budget', type=int, default=8,
+                         help='Batch budget (default: 8)')
+
     args = parser.parse_args()
+
+    # Commands that don't need a DB connection
+    if args.command == 'list-docs':
+        cmd_list_docs(args.project_root)
+        sys.exit(0)
+    if args.command == 'batch-check':
+        cmd_batch_check(args.project_root, reset=args.reset, budget=args.budget)
+        sys.exit(0)
+
     conn = get_db(args.project_root)
 
     if args.command == 'next-task':
@@ -1172,6 +1283,8 @@ if __name__ == '__main__':
         cmd_phase_files(conn, args.phase_id)
     elif args.command == 'phase-stories':
         cmd_phase_stories(conn, args.phase_id)
+    elif args.command == 'phase-tasks':
+        cmd_phase_tasks(conn, args.phase_id)
     elif args.command == 'verify-intake':
         cmd_verify_intake(conn, args.project_root,
                           args.expected_epics, args.expected_stories, args.expected_tasks)
@@ -1181,5 +1294,7 @@ if __name__ == '__main__':
         cmd_update_phase(conn, args.phase_id, args.status)
     elif args.command == 'update-story-gate':
         cmd_update_story_gate(conn, args.story_id, args.status)
+    elif args.command == 'active-phase':
+        cmd_active_phase(conn)
 
     conn.close()

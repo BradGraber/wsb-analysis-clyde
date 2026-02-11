@@ -8,9 +8,15 @@ user_invocable: true
 
 Walk the user through configuring their local permissions for this project. Choices are written to `.claude/settings.local.json` (gitignored, personal to this clone).
 
-## How It Works
+## How Security Works
 
-The shared `.claude/settings.json` ships with safe defaults (read-only git, sqlite3, deny destructive commands). This skill lets users opt in to additional permissions.
+Clyde uses a two-layer security model for Bash commands:
+
+**Layer 1 — PreToolUse hook** (primary): The hook `.claude/hooks/approve-command.sh` inspects every Bash command before execution. Safe commands are auto-approved without prompting. Dangerous commands (recursive deletes, sudo, force push, reset --hard, etc.) fall back to a user prompt — you can approve or deny each one. This works even for chained commands (`cd dir && rm -rf stuff`), because the hook does substring matching on the full command string.
+
+**Layer 2 — settings.json patterns** (fallback): If the hook fails to run, Claude Code falls back to the permission patterns in `.claude/settings.json`. The shared file ships with conservative defaults (read-only git, sqlite3). Your local `.claude/settings.local.json` (configured by this skill) adds broader patterns for your environment.
+
+**What `/setup` configures**: The hook handles Bash auto-approval for implementation. This skill configures *additional* local permissions — git write operations, file editing, web access — that complement the hook. For example, `Bash(git *)` in your local settings ensures single git commands (add, commit, push) don't prompt even if the hook is disabled.
 
 ## Steps
 
@@ -45,7 +51,7 @@ Based on the user's choices, write `.claude/settings.local.json` with the correc
 - Bash wildcards use a SPACE before `*`: `Bash(git *)`
 - The legacy `:*` colon syntax is deprecated — always use a space
 - `*` can appear anywhere in the pattern: beginning, middle, or end
-- Chained `&&` commands are never auto-approved (Claude Code security feature) — each command needs its own pattern
+- Chained `&&` commands don't match simple patterns (Claude Code matches the whole string) — the PreToolUse hook handles these automatically
 - Include no-argument variants where appropriate: `Bash(git stash)` alongside `Bash(git stash *)`
 
 **Example: All git + file edits (recommended):**
@@ -86,5 +92,6 @@ Based on the user's choices, write `.claude/settings.local.json` with the correc
 After writing, confirm the settings were saved and summarize what was configured. Remind the user:
 - These settings are personal (gitignored) and won't affect other users
 - They can re-run `/setup` anytime to change their preferences
-- The shared deny rules (no `rm -rf`, no `sudo`, no force push, no reset --hard, no clean -f) still apply regardless
-- Deny rules take precedence over allow rules, so `Bash(git *)` is safe — destructive git ops are still blocked
+- The PreToolUse hook blocks dangerous commands (rm -rf, sudo, force push, reset --hard, clean -f, checkout ., restore ., branch -D) regardless of your local settings
+- The shared deny rules in settings.json serve as an additional fallback layer
+- `Bash(git *)` is safe — the hook blocks destructive git operations even in chained commands

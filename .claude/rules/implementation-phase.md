@@ -6,6 +6,7 @@ When the user asks to implement, build, or work on tasks, follow these steps:
 - `output/plan.db` must exist
 - `output/technical-brief.md` must exist
 - If either is missing, run the Intake Phase first (`/analyze`)
+- If `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` is not set, warn the user that launching via `./clyde` is recommended to prevent context exhaustion during long implementation sessions
 
 ## Database Operations
 
@@ -43,6 +44,9 @@ python3 scripts/plan-ops.py phase-files PHASE_ID
 # Get all stories in a phase (with descriptions containing acceptance criteria)
 python3 scripts/plan-ops.py phase-stories PHASE_ID
 
+# Get all tasks in a phase with descriptions (for test-writer structural context)
+python3 scripts/plan-ops.py phase-tasks PHASE_ID
+
 # Show overall project progress (task/story/epic counts, in-progress items, phases)
 python3 scripts/plan-ops.py progress
 
@@ -57,6 +61,15 @@ python3 scripts/plan-ops.py update-phase PHASE_ID --status STATUS
 
 # Record story gate review result
 python3 scripts/plan-ops.py update-story-gate STORY_ID --status STATUS
+
+# Find the currently active phase (JSON — used by PreCompact hook and /resume)
+python3 scripts/plan-ops.py active-phase
+
+# List available reference docs from docs/ and input/docs/ (JSON)
+python3 scripts/plan-ops.py list-docs
+
+# Increment batch counter and check budget (JSON — returns {batch, budget, stop})
+python3 scripts/plan-ops.py batch-check [--reset] [--budget N]
 ```
 
 ## Resume Detection
@@ -70,14 +83,15 @@ python3 scripts/plan-ops.py resume-phase PHASE_ID
 This returns a JSON object with `resume_action` telling you where to pick up. The response always includes `orphaned_tasks` and `pending_story_gates` arrays regardless of the action.
 
 - **`start_fresh`** (phase status: `pending`) — Normal start. Go to Step 1.
-- **`find_next_task`** (phase status: `tests_written` or `in_progress`, no orphans or pending gates) — Tests already exist. Skip Steps 1-2, go to Step 3.
+- **`find_next_task`** (phase status: `tests_written` or `in_progress`, no orphans or pending gates) — Tests already exist. Skip Steps 1-2, go to Step 3. Reset batch counter: `python3 scripts/plan-ops.py batch-check --reset`.
 - **`resume_orphan`** (orphaned in_progress tasks found, no pending gates) — A previous session crashed mid-task. The `orphaned_tasks` array lists them. Process as a batch:
-  1. Get context for all orphans (`task-context` for each)
-  2. Do NOT call `start-task` — they're already in_progress
-  3. Spawn implementers in parallel (Step 5) for all orphans
-  4. Evaluate results and complete tasks (Steps 6-7)
-  5. After orphans are resolved, check for any pending story gates before continuing to Step 3
-- **`resume_mixed`** (both orphaned tasks AND pending story gates exist) — A previous batch session crashed partway through processing. Handle orphans first (they may complete more stories), then run all pending story gates (Step 8), then continue to Step 3.
+  1. Run process cleanup to clear any tracked orphans from the crashed session: `bash .claude/hooks/cleanup-processes.sh --direct`
+  2. Get context for all orphans (`task-context` for each)
+  3. Do NOT call `start-task` — they're already in_progress
+  4. Spawn implementers in parallel (Step 5) for all orphans
+  5. Evaluate results and complete tasks (Steps 6-7)
+  6. After orphans are resolved, check for any pending story gates before continuing to Step 3
+- **`resume_mixed`** (both orphaned tasks AND pending story gates exist) — A previous batch session crashed partway through processing. Run process cleanup first (`bash .claude/hooks/cleanup-processes.sh --direct`), then handle orphans (they may complete more stories), then run all pending story gates (Step 8), then continue to Step 3.
 - **`run_story_gate`** (pending story gates found, no orphans) — A previous session completed a story but crashed before running its gate. The `pending_story_gates` array lists them. Run Step 8 for each, then go to Step 3.
 - **`run_phase_gate`** (phase status: `gate_pending`) — All tasks were completed but the phase gate never ran or user didn't approve. Go directly to Step 10.
 - **`already_complete`** (phase status: `complete`) — This phase is done. Report to user and suggest the next phase.
@@ -92,17 +106,20 @@ The main conversation acts as an **orchestrator**. Files changed per task are tr
 
 ### 2. Write Tests
 
-Run `plan-ops.py phase-stories PHASE_ID` to get all stories and their acceptance criteria. Then spawn **test-writer** agent (model: **sonnet**) with:
+Run `plan-ops.py phase-stories PHASE_ID`, `plan-ops.py phase-tasks PHASE_ID`, and `plan-ops.py list-docs` to get all stories, tasks, and available reference documentation. Then spawn **test-writer** agent (model: **sonnet**) with:
 - The story acceptance criteria from `phase-stories` output
+- The task descriptions from `phase-tasks` output (structural hints — file paths, naming patterns, config keys)
 - Phase exit criteria (from `phase-status` in step 1)
 - `output/technical-brief.md`
+- The `all_docs` list from `list-docs` output (the test-writer can read specific docs on demand for API response shapes, etc.)
 
-The test-writer produces test files that define "done" for this phase. All tests are expected to fail initially — no implementation exists yet. Note the test runner command for use in steps 8 and 10.
+The test-writer produces test files that define "done" for this phase, plus `project-workspace/tests/conventions.md` documenting structural decisions (module paths, naming conventions, import patterns). All tests are expected to fail initially — no implementation exists yet. Note the test runner command for use in steps 8 and 10.
 
-After the test-writer completes, record that tests exist:
+After the test-writer completes, record that tests exist and initialize the batch counter:
 
 ```bash
 python3 scripts/plan-ops.py update-phase PHASE_ID --status tests_written
+python3 scripts/plan-ops.py batch-check --reset
 ```
 
 ### 3. Find Available Tasks
@@ -132,7 +149,9 @@ plan-ops.py start-task TASK_ID
 
 ### 5. Spawn Implementers
 
-Spawn **one implementer subagent per task** (model: **sonnet**), all in a **single message** (parallel Task calls). Each receives its own task context JSON + `output/technical-brief.md`.
+Spawn **one implementer subagent per task** (model: **sonnet**), all in a **single message** (parallel Task calls). Each receives its own task context JSON + `output/technical-brief.md`. If `project-workspace/tests/conventions.md` exists (produced by the test-writer in Step 2), include it as additional context — it documents the structural conventions implementers should follow.
+
+Also include the `all_docs` list from `plan-ops.py list-docs` (gathered in Step 2 or re-run here). Do not read or include the file contents — implementers will read specific docs on demand if their task involves an external API or library feature.
 
 All implementers return a JSON report with: `status` (COMPLETE / BLOCKED / PARTIAL), `files_changed` (array), `criteria` (array with `met` boolean), `concerns` (array with `level`: blocker/warning/info), and `blocked_reason`.
 
@@ -196,9 +215,24 @@ Present issues to the user. The user decides whether to fix now (spawn targeted 
 
 Story gates run sequentially — each may need user attention if it fails.
 
-### 9. Repeat
+### 9. Budget Check & Repeat
 
-Go to Step 3 for the next batch until `available-tasks` returns an empty array.
+After completing a batch (Steps 3-8), check the context budget before continuing.
+
+```bash
+python3 scripts/plan-ops.py batch-check
+```
+
+This returns JSON: `{"batch": N, "budget": 8, "stop": false}`. The command increments the counter, writes it to disk, and checks the budget — all procedurally.
+
+- **If `stop` is `true`:** Run `/end-session` to wrap up cleanly (summarize progress, offer git commit, update memory). The end-session report should list "Run `/resume` to continue" in open items. **Stop — do not proceed to Step 3.**
+- **If `stop` is `false`:** Go to Step 3 for the next batch.
+
+#### Auto-Compaction
+
+Auto-compaction may fire between batches (recommended: set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80`). The PreCompact hook (`.claude/hooks/pre-compact.sh`) re-injects critical state from plan.db and durable files. After compaction:
+- Re-read `project-workspace/tests/conventions.md` for the test runner command and conventions
+- Continue the execution loop from Step 3
 
 ### 10. Phase Gate
 
@@ -263,3 +297,7 @@ python3 scripts/plan-ops.py update-phase PHASE_ID --status complete
 - `resume-phase` returns `resume_mixed` when both orphaned tasks and pending story gates exist (possible after a batch session crash) — handle orphans first, then gates
 - Phase lifecycle: `pending` → `tests_written` → `in_progress` → `gate_pending` → `complete`
 - Skipped tasks prevent their parent story from auto-completing — this is correct behavior
+- The batch counter is managed by `batch-check` (file-based at `output/.session-batch-count`) — procedural, survives compaction
+- Auto-compaction is handled by the PreCompact hook (`.claude/hooks/pre-compact.sh`) which re-injects critical state from plan.db
+- Static batch budget of 8 is a safety net — compaction handles the typical case. `/end-session` + `/resume` handle the budget-exceeded case
+- Test commands that `cd` into subdirectories must use subshell syntax `(cd ... && command)` to prevent CWD drift — bare `cd ... && command` shifts CWD for all subsequent Bash calls, breaking relative `plan-ops.py` invocations

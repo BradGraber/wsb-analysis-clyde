@@ -194,12 +194,14 @@ Review the phase's entry criteria before starting work. Entry criteria typically
 
 The **test-writer** agent (sonnet) receives:
 - All story acceptance criteria in the phase (from `plan-ops.py phase-stories`)
+- All task descriptions in the phase (from `plan-ops.py phase-tasks`) — these provide structural hints like file paths, naming conventions, and config keys that the test-writer uses for structural decisions
 - Phase exit criteria
 - The technical brief
 
 It produces:
 - Behavioral test files organized by story — one test file per story or logical grouping
 - Integration tests for phase-level exit criteria where applicable
+- A **conventions document** (`project-workspace/tests/conventions.md`) — documents the structural decisions made (module paths, naming patterns, import conventions, fixture API) so implementers can follow them
 - A test runner command for the orchestrator to use in later gates
 
 All tests are expected to **fail initially** — no implementation exists yet. Tests define "done" for the phase.
@@ -238,8 +240,9 @@ python3 scripts/plan-ops.py start-task TASK_ID
 Spawn **one implementer agent** (sonnet) per task, all in a **single message** (parallel Task calls). Each receives:
 - Its own task context JSON from Step 4
 - `output/technical-brief.md`
+- `project-workspace/tests/conventions.md` (if it exists) — structural conventions from the test-writer that the implementer should follow
 
-Each implementer reads the technical brief, reviews existing code in `project-workspace/`, writes code in `project-workspace/src/`, and returns a **JSON report**:
+Each implementer reads the technical brief and conventions document, reviews existing code in `project-workspace/`, writes code in `project-workspace/src/`, and returns a **JSON report**:
 
 ```json
 {
@@ -330,9 +333,16 @@ It reads every changed file and returns:
 
 Story gates run sequentially — each may need user attention if it fails.
 
-### Step 9: Repeat
+### Step 9: Budget Check & Repeat
 
-Return to Step 3 for the next batch until `available-tasks` returns an empty array.
+After completing a batch (Steps 3-8), check the context budget before continuing.
+
+The batch counter is stored in `output/.session-batch-count` (a file, not conversation context — survives compaction). It's initialized to 0 at the start of each session and incremented after each batch. The budget is **8 batches per session**.
+
+- **If counter >= 8:** Run `/end-session` to wrap up cleanly, then stop. The user resumes with `/resume`.
+- **If counter < 8:** Return to Step 3 for the next batch.
+
+Auto-compaction may fire between batches. The PreCompact hook (`.claude/hooks/pre-compact.sh`) re-injects critical state from plan.db so the orchestrator can continue working after compaction. See [Context Management](#context-management) below for details.
 
 ### Step 10: Phase Gate
 
@@ -519,6 +529,10 @@ plan-ops.py resume-phase ID    # Session resume detection with routing instructi
 
 Shows current project state: progress counts, in-progress tasks, skipped tasks, and suggests the next action.
 
+### `/resume`
+
+Resumes implementation from where the last session left off. Auto-detects the active phase via `plan-ops.py active-phase`, resets the batch counter, and enters the implementation loop at the correct step based on `resume-phase` routing. Use after `/clear` to continue a phase.
+
 ### `/end-session`
 
 Wraps up the current session:
@@ -556,6 +570,35 @@ Pulls framework updates from the upstream `clyde` remote:
 
 ---
 
+## Context Management
+
+The Implementation Phase uses a two-layer approach to manage context window usage:
+
+### Layer 1: Compaction Guardrails (primary)
+
+Auto-compaction fires when the context window fills up. By default this can cause unpredictable information loss. Clyde makes compaction reliable through:
+
+- **Compact Instructions** (in `CLAUDE.md`) — tells the orchestrator what to preserve during compaction and where to re-read critical data from durable sources
+- **PreCompact hook** (`.claude/hooks/pre-compact.sh`) — fires before compaction and re-injects critical orchestrator state from plan.db: active phase, resume routing, test runner command, and batch counter
+- **Durable storage** — the test runner command is stored in `project-workspace/tests/conventions.md` (on disk), the batch counter in `output/.session-batch-count`, and all task/story/phase state in `output/plan.db`
+
+The orchestrator can continue working after compaction because all critical state is reconstructed from durable sources.
+
+**Recommended:** Set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80` in your environment. This triggers compaction at 80% capacity instead of the default 95%, giving 20% headroom for a higher-quality summary.
+
+### Layer 2: Safety Budget (backstop)
+
+After multiple compaction cycles, summary quality degrades (summary of a summary). A static batch budget of **8 batches per session** acts as an emergency brake:
+
+- The batch counter is stored in `output/.session-batch-count`
+- After 8 batches, the orchestrator runs `/end-session` and stops
+- The user resumes with `/clear` → `/resume`
+- `resume-phase` handles all mid-session states cleanly — no progress is lost
+
+In practice, compaction handles the typical case and the budget rarely fires.
+
+---
+
 ## Subagent Summary
 
 | Agent | Phase | Model | Role |
@@ -565,8 +608,8 @@ Pulls framework updates from the upstream `clyde` remote:
 | tech-brief-compressor | Intake | sonnet | Compresses draft brief to 50-100 lines preserving accuracy |
 | tech-brief-reviewer | Intake | sonnet | Reviews brief for accuracy, completeness, length, and inferences |
 | tech-brief-fact-checker | Intake | sonnet | Claim-by-claim verification of brief against PRD using Grep |
-| test-writer | Implementation | sonnet | Writes failing tests from acceptance criteria before implementation |
-| implementer | Implementation | sonnet | Writes code for a single task, returns JSON report |
+| test-writer | Implementation | sonnet | Writes failing tests from acceptance criteria + task structural hints, produces conventions document |
+| implementer | Implementation | sonnet | Writes code for a single task following conventions document, returns JSON report |
 | plan-validator | Implementation | sonnet | Reviews implementation at story and phase gates |
 
 ---

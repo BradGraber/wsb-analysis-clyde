@@ -24,6 +24,8 @@ Clyde is a reusable framework for Claude Code-driven software development. Clone
   - `stories/story-NNN-NNN.md` — Story definitions with YAML frontmatter
   - `tasks/task-NNN-NNN-NN.md` — Task definitions with YAML frontmatter
   - `work-sequence.md` — Phased execution plan with entry/exit criteria
+  - `docs/` — Project-specific reference documentation (API docs, tech stack extracts)
+- `docs/` — Framework-shipped reference documentation (API docs, tech stack extracts)
 - `output/` — Generated artifacts
   - `plan.db` — SQLite database (plan + progress tracking)
   - `technical-brief.md` — Distilled tech reference from PRD
@@ -32,7 +34,7 @@ Clyde is a reusable framework for Claude Code-driven software development. Clone
 - `.claude/agents/` — Subagent definitions
   - Intake (analyze): tech-brief-drafter, tech-brief-compressor, tech-brief-reviewer, tech-brief-fact-checker, phase-extractor
   - Implementation: implementer, test-writer, plan-validator
-- `.claude/hooks/` — Hook scripts for logging (subagent transcripts + orchestrator tool calls)
+- `.claude/hooks/` — Hook scripts for logging and process cleanup
 - `.claude/framework-manifest` — Lists framework-owned paths for `/update`
 
 ## Rules
@@ -45,3 +47,15 @@ Clyde is a reusable framework for Claude Code-driven software development. Clone
 - `output/technical-brief.md` is the concise tech reference — subagents read this, not the full PRD
 - All built software goes in `project-workspace/src/`
 - Use the orchestrator + subagent model to manage context
+- If you start a background process, record its PID for automatic cleanup: `echo $! >> output/.spawned-pids`. The framework kills tracked PIDs on SubagentStop and SessionEnd. Never suppress cleanup errors with `2>/dev/null || true`.
+
+## Compact Instructions
+
+When compacting during the implementation phase, preserve:
+- Current phase ID, phase status, and which execution step you're on
+- The batch counter (authoritative source: `output/.session-batch-count`)
+- The test runner command (source: `project-workspace/tests/conventions.md` → "Test Runner" section)
+- Any pending story gates and their status
+- Warning-level concerns from recent implementer reports
+- After compaction, re-read `output/.session-batch-count` for the batch counter and `project-workspace/tests/conventions.md` for conventions and test runner command
+- `output/plan.db` is the source of truth for all task/story/phase state — re-query with `plan-ops.py` if uncertain

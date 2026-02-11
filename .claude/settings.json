@@ -12,13 +12,6 @@
       "Bash(ls)"
     ],
     "deny": [
-      "Read(project-workspace/.env)",
-      "Read(project-workspace/.env.*)",
-      "Read(project-workspace/data/schwab_token.json)",
-      "Read(project-workspace/certs/*)",
-      "Bash(cat*project-workspace/.env*)",
-      "Bash(cat*project-workspace/data/schwab_token*)",
-      "Bash(cat*project-workspace/certs/*)",
       "Bash(rm -rf *)",
       "Bash(sudo *)",
       "Bash(git push --force *)",
@@ -28,12 +21,27 @@
     ]
   },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/approve-command.sh"
+          }
+        ]
+      }
+    ],
     "SubagentStop": [
       {
         "hooks": [
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/log-subagent.sh"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/cleanup-processes.sh"
           }
         ]
       }
@@ -76,6 +84,20 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/log-orchestrator.sh"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/cleanup-processes.sh"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-compact.sh"
           }
         ]
       }

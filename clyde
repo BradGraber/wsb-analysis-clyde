@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Clyde entry point — detects fresh clones and routes accordingly
 
+# Trigger auto-compaction at 80% context to prevent mid-batch exhaustion
+export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80
+
 if [ -f ".claude/rules/init-gate.md" ] && [ ! -f ".claude/rules/dev-mode.md" ]; then
     claude "/init"
 else

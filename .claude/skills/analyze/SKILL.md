@@ -13,15 +13,18 @@ Follow this orchestrator workflow. The main conversation stays lean — heavy wo
 Quickly inventory `input/` without reading file contents:
 - Glob for `input/PRD.md` and `input/work-sequence.md` — both are required
 - Count files in `input/epics/`, `input/stories/`, `input/tasks/`
+- Scan for reference docs in `docs/` and `input/docs/` (glob for `*.md` files in both)
 - Present the inventory to the user:
   ```
   Found: PRD.md, work-sequence.md
   Epics: X files
   Stories: Y files
   Tasks: Z files
+  Reference docs: N files (docs/: [list], input/docs/: [list])
   ```
 - If PRD.md or work-sequence.md is missing, stop and ask the user
 - If any directory is empty, flag it and confirm with the user before proceeding
+- If the PRD references external APIs or tech stack components but no corresponding reference docs exist, suggest running `/docs` to obtain them before proceeding
 
 ## Step 2: Build Structured Data (you do this)
 
