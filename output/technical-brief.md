@@ -10,7 +10,7 @@ Three-tier: FastAPI backend (acquisition, AI, signals, positions), SQLite (persi
 
 | Integration | Purpose | Auth | Critical |
 |---|---|---|---|
-| Reddit (PRAW) | WSB posts/comments | OAuth2 (.env) | Yes |
+| Reddit (Async PRAW) | WSB posts/comments | OAuth2 (.env) | Yes |
 | OpenAI GPT-4o-mini | Sentiment, sarcasm, image analysis | API Key (.env) | Yes |
 | Schwab API | Real-time quotes, 5-min candles, options chains+greeks | OAuth 2.0 (token file) | No (retry+skip) |
 | yfinance | Historical prices, S&P 500 benchmark, fallback | None | No (graceful degradation) |
@@ -83,7 +83,7 @@ Returns HTTP 202 with `run_id`, executes 7 phases in background thread (10-30 mi
 | Integration | Method | Storage |
 |---|---|---|
 | Dashboard to Backend | None | N/A (local single-user) |
-| Backend to Reddit | OAuth2 (PRAW) | .env: REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USER_AGENT |
+| Backend to Reddit | OAuth2 (Async PRAW) | .env: REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USER_AGENT |
 | Backend to OpenAI | API Key | .env: OPENAI_API_KEY |
 | Backend to yfinance | None | N/A (public) |
 | Backend to Schwab | OAuth 2.0 (Auth Code Grant) | .env: SCHWAB_CLIENT_ID, SCHWAB_CLIENT_SECRET, SCHWAB_CALLBACK_URL; Token: ./data/schwab_token.json |
@@ -118,7 +118,7 @@ Returns HTTP 202 with `run_id`, executes 7 phases in background thread (10-30 mi
 
 ## Technical Stack & Constraints
 
-FastAPI (Python), SQLite, Vue.js 3 (Composition API), PRAW, OpenAI GPT-4o-mini (~$45/mo), Schwab API (OAuth 2.0), yfinance, Chart.js/vue-sparklines, Tailwind/Bootstrap. Total ~$46-47/mo.
+FastAPI (Python), SQLite, Vue.js 3 (Composition API), Async PRAW, OpenAI GPT-4o-mini (~$45/mo), Schwab API (OAuth 2.0), yfinance, Chart.js/vue-sparklines, Tailwind/Bootstrap. Total ~$46-47/mo.
 
 **Constraints:** Experimental, single-user, swing trading, cost-conscious (GPT-4o-mini), desktop only.
 

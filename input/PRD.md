@@ -62,7 +62,7 @@ Individual traders lack the capacity to systematically process the volume of WSB
 ### 1.2 Solution
 
 An end-to-end pipeline that:
-1. Acquires prioritized WSB comments (FastAPI with PRAW)
+1. Acquires prioritized WSB comments (FastAPI with Async PRAW)
 2. Analyzes sentiment using AI that understands WSB communication style
 3. Detects trading signals via Quality (substantive reasoning) and Consensus (volume alignment) methods
 4. Presents actionable signals via web dashboard
@@ -115,12 +115,12 @@ The WSB Analysis Tool uses a **three-tier architecture** consisting of a FastAPI
                         ┌───────────────┼───────────────┬──────────────────┐
                         │               │               │                  │
                    Reddit API      OpenAI API      Schwab API        yfinance API
-                   (PRAW)         GPT-4o-mini    (real-time prices   (historical
+                   (Async PRAW)         GPT-4o-mini    (real-time prices   (historical
                                   (+ vision)      + options)          + benchmark)
 ```
 
 **External Dependencies:**
-- **Reddit API** (via PRAW): Source of WSB posts and comments
+- **Reddit API** (vian Async PRAW): Source of WSB posts and comments
 - **OpenAI API** (GPT-4o-mini): Sentiment analysis, sarcasm detection, image analysis
 - **Schwab API** (access confirmed): Primary source for real-time stock quotes, intraday price data, options chains with greeks, and options premiums. Requires OAuth 2.0 authentication.
 - **yfinance API**: Historical stock price data for S&P 500 benchmark comparison (evaluation periods), historical price lookbacks, and price sparkline data. Not used for real-time monitoring or options data.
@@ -143,7 +143,7 @@ The backend is organized into eight major subsystems, each with clear responsibi
 
 | Subsystem | Responsibility | Key Dependencies |
 |-----------|----------------|------------------|
-| **Reddit Acquisition** | Authenticate via PRAW OAuth2, fetch top 10 "hot" posts from r/wallstreetbets, retrieve up to 1000 comments per post, build parent chain context for threaded discussions | PRAW library, Reddit API |
+| **Reddit Acquisition** | Authenticate vian Async PRAW OAuth2, fetch top 10 "hot" posts from r/wallstreetbets, retrieve up to 1000 comments per post, build parent chain context for threaded discussions | Async PRAW library, Reddit API |
 | **Image Analysis** | Detect post images (i.redd.it, imgur, preview.redd.it), analyze via GPT-4o-mini vision API to extract charts/data/tickers, provide visual context for comment analysis | OpenAI vision API |
 | **Comment Prioritization** | Score comments using financial keyword density, author historical trust score, engagement metrics (upvotes, replies), thread depth penalty; select top 50 comments per post (~500 total) | SQLite (authors table) |
 | **AI Sentiment Analysis** | Analyze each comment individually via GPT-4o-mini, extract tickers mentioned, detect sarcasm and reasoning presence, classify sentiment (bullish/bearish/neutral), assign confidence score | OpenAI GPT-4o-mini API |
@@ -157,7 +157,7 @@ The backend is organized into eight major subsystems, each with clear responsibi
 The `/analyze` endpoint orchestrates the entire analysis pipeline, from data acquisition through position monitoring. Processing occurs in seven sequential phases:
 
 **Phase 1: Acquisition**
-1. Authenticate with Reddit using PRAW OAuth2 credentials (environment variables)
+1. Authenticate with Reddit using Async PRAW OAuth2 credentials (environment variables)
 2. Fetch top 10 "hot" posts from r/wallstreetbets subreddit
 3. For each post:
    - Check for image attachment (i.redd.it, imgur, preview.redd.it)
@@ -417,7 +417,7 @@ The backend implements graceful degradation where possible, failing fast only wh
 
 | Failure Scenario | Detection | Response | User Impact |
 |------------------|-----------|----------|-------------|
-| **Reddit API outage** | PRAW raises exception during post fetch | Log error with details, return HTTP 503 Service Unavailable | Analysis run fails; user sees error message, retries manually later |
+| **Reddit API outage** | Async PRAW raises exception during post fetch | Log error with details, return HTTP 503 Service Unavailable | Analysis run fails; user sees error message, retries manually later |
 | **Image analysis failure** | OpenAI vision API timeout/error | Retry 3 times with exponential backoff (2s, 5s, 10s delays); if all fail: log warning, set image_analysis=NULL, continue | Comment analysis proceeds without image context (acceptable; images are supplementary) |
 | **OpenAI rate limit (429)** | OpenAI API returns 429 status | Exponential backoff (1s, 2s, 4s, 8s, max 30s), retry request | Analysis slows but completes; user experiences longer wait |
 | **Malformed AI JSON** | json.loads() raises exception | Retry same comment once; if retry fails: log error, skip comment, continue | Single comment lost; signal detection uses remaining comments |
@@ -448,7 +448,7 @@ This section documents critical architectural decisions and the alternatives con
 | **SQLite for author trust scores** | Fast local lookups during prioritization (no network round-trip); embedded database simplifies deployment; sufficient performance for single-user scale (<10k authors tracked) | External cache (Redis) for author trust scores | Rejected: Over-engineering; SQLite index on username provides sub-millisecond lookups; adding Redis adds deployment dependency for no measurable benefit |
 
 **See Also:**
-- **Appendix A**: Full PRAW configuration details and Reddit API integration specifications
+- **Appendix A**: Full Async PRAW configuration details and Reddit API integration specifications
 - **Appendix D**: Internal data structure definitions (ProcessedPost, ProcessedComment schemas)
 - **Appendix E**: Complete AI prompt templates, response parsing logic, and error handling for OpenAI integration
 
@@ -857,7 +857,7 @@ All inter-component communication uses **synchronous HTTP/JSON over REST**, with
 ```
 Vue Dashboard ────HTTP GET/POST (JSON)───▶ FastAPI Backend ────SQL queries───▶ SQLite Database
                                                   │
-                                                  ├──HTTPS──▶ Reddit API (PRAW)
+                                                  ├──HTTPS──▶ Reddit API (Async PRAW)
                                                   ├──HTTPS──▶ OpenAI API (GPT-4o-mini + vision)
                                                   ├──HTTPS──▶ yfinance API (stock prices)
                                                   └──HTTPS──▶ Schwab API (real-time pricing, options data)
@@ -879,7 +879,7 @@ The system uses **differentiated authentication** based on API requirements:
 | Integration | Authentication Method | Configuration | Security Notes |
 |-------------|----------------------|---------------|----------------|
 | **Dashboard → Backend** | None (unauthenticated) | N/A | Acceptable: local deployment, single user, experimental tool; no sensitive data exposure risk |
-| **Backend → Reddit** | OAuth2 via PRAW | Environment variables: `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USER_AGENT` | Required by Reddit API; credentials stored in `.env` file (excluded from git via `.gitignore`) |
+| **Backend → Reddit** | OAuth2 vian Async PRAW | Environment variables: `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USER_AGENT` | Required by Reddit API; credentials stored in `.env` file (excluded from git via `.gitignore`) |
 | **Backend → OpenAI** | API key (Bearer token) | Environment variable: `OPENAI_API_KEY` | Standard OpenAI auth; key stored in `.env`; monthly spend tracked via OpenAI dashboard |
 | **Backend → yfinance** | None (public API) | N/A | Free public API; no rate limits enforced (best-effort availability) |
 | **Backend → Schwab** | OAuth 2.0 (Authorization Code Grant) | Environment variables: `SCHWAB_CLIENT_ID`, `SCHWAB_CLIENT_SECRET`, `SCHWAB_CALLBACK_URL`; Token storage: `./data/schwab_token.json` (excluded from git) | Requires funded Schwab brokerage account; free API access; see Schwab OAuth Lifecycle below |
@@ -984,7 +984,7 @@ Error occurs
 
 | ID | Requirement | Priority | Source |
 |----|-------------|----------|--------|
-| FR-010 | **Reddit API Integration** — Fetch data directly from Reddit API using PRAW library. Retrieve top 10 hot posts, up to 1000 comments per post, prioritize top 50 comments per post using financial keywords, author trust, and engagement scoring. | Must | qc-1-sd-002, PRD-arch-2026-02-04 |
+| FR-010 | **Reddit API Integration** — Fetch data directly from Reddit API using Async PRAW library. Retrieve top 10 hot posts, up to 1000 comments per post, prioritize top 50 comments per post using financial keywords, author trust, and engagement scoring. | Must | qc-1-sd-002, PRD-arch-2026-02-04 |
 | FR-011 | **On-Demand Analysis** — Run analysis when user triggers, not on schedule | Must | qc-1-rm-03, qc-1-arch-002 |
 | FR-012 | **Web Dashboard Interface** — Primary interface is a Vue-based web dashboard with data loading on page open, manual refresh button, and interactive exploration. No auto-polling (on-demand usage pattern). Default view: Stock/Quality portfolio. | Must | qc-1-sd-003, qc-2-dev-004 |
 | FR-050 | **Default Portfolio View** — Dashboard loads with Stock/Quality portfolio selected by default. User can switch to other portfolios (Stock/Consensus, Options/Quality, Options/Consensus) via tabs. No state persistence needed — always resets to Stock/Quality on page load. | Must | HITL-2026-02-04 |
@@ -1330,7 +1330,7 @@ DAILY MONITORING (checked in priority order):
 
 | Layer | Technology | Rationale |
 |-------|------------|-----------|
-| **Data Acquisition** | PRAW + Reddit OAuth2 | Native Python library, direct control, no external dependency |
+| **Data Acquisition** | Async PRAW + Reddit OAuth2 | Native Python library, direct control, no external dependency |
 | **AI Analysis** | OpenAI GPT-4o-mini | Cost-effective (~$45/month), good at sarcasm |
 | **Backend API** | FastAPI (Python) | Fast, modern Python API framework; integrates with existing analysis code |
 | **Storage** | SQLite | Embedded database, zero-config, ideal for single-user local-first deployment |
@@ -1434,7 +1434,7 @@ The experiment is considered **failed** (hypothesis invalidated) if:
 |------------|-----------------|
 | WSB sentiment contains predictive signal | Core hypothesis fails; experiment unsuccessful |
 | AI can parse sarcasm/memes accurately | Analysis produces incorrect signals |
-| Reddit API is accessible | PRAW handles rate limiting; API outages logged but no retry logic for Phase 1 |
+| Reddit API is accessible | Async PRAW handles rate limiting; API outages logged but no retry logic for Phase 1 |
 | SQLite file is writable | Storage layer needs setup |
 | Signals are daily rollups | Each calendar day produces one signal per ticker/type; multiple runs refine the same signal. Positions open once per signal. |
 
@@ -1568,7 +1568,7 @@ Comprehensive pre-implementation review resolved all implementation ambiguities:
 |-----------|----------|--------|
 | Dual signal timing | FR-024 | Clarified positions open immediately when detected, regardless of existing positions |
 | Signal rollup model | Section 8.2, FR-039 | Changed from point-in-time to daily rollup; one signal per ticker/type/day, refined across runs |
-| Reddit API reliability | Section 8.2 | PRAW handles rate limiting; log failures, no retry logic for Phase 1 |
+| Reddit API reliability | Section 8.2 | Async PRAW handles rate limiting; log failures, no retry logic for Phase 1 |
 | Deployment guidance | Section 6.2 (new) | Added SQLite, FastAPI, Vue deployment instructions |
 | Phase 2 scope | Section 9 | Real trading parameters deferred to Phase 2 PRD |
 | Performance handling | NFR-004 | Log warning if >15 min, continue processing |
@@ -1747,7 +1747,7 @@ HITL session decided to replace n8n workflow with native FastAPI Reddit integrat
 | Decision | Value | Rationale |
 |----------|-------|-----------|
 | Remove n8n | Yes | Simplify architecture, single codebase |
-| Reddit library | PRAW | Native Python, well-maintained, built-in rate limiting |
+| Reddit library | Async PRAW | Native Python, well-maintained, built-in rate limiting |
 | Data format | New optimized | No backward compatibility needed |
 | Image analysis | Synchronous | Ensures context available before comment analysis |
 | Author trust | Full from day 1 | Quality implementation, not minimal viable |
@@ -1787,7 +1787,7 @@ HITL session decided to replace n8n workflow with native FastAPI Reddit integrat
 
 The FastAPI backend provides native Reddit integration:
 
-- **PRAW library** for OAuth2 authentication
+- **Async PRAW library** for OAuth2 authentication
 - **Top 10 "hot" posts** from r/wallstreetbets
 - **Top 1000 comments per post** sorted by engagement
 - **Comment prioritization** using:
@@ -1800,7 +1800,7 @@ The FastAPI backend provides native Reddit integration:
   - Detects images from i.redd.it, imgur, preview.redd.it
   - Extracts financial data, charts, tickers from images
   - Provides visual context for comment analysis
-- **Rate limit handling** via PRAW built-in (60 requests/minute)
+- **Rate limit handling** vian Async PRAW built-in (60 requests/minute)
 
 Configuration via environment variables:
 - `REDDIT_CLIENT_ID`

@@ -10,19 +10,19 @@ estimated_story_points: 34
 # Epic: Reddit Data Acquisition Pipeline
 
 ## Description
-Implement PRAW integration for fetching top 10 hot posts from r/wallstreetbets, extracting up to 1000 comments per post, prioritizing top 50 comments per post using composite scoring (financial keywords, author trust, engagement, depth penalty), building parent chain context, and performing image analysis on post images. Includes comment deduplication to prevent redundant AI costs.
+Implement Async PRAW integration for fetching top 10 hot posts from r/wallstreetbets, extracting up to 1000 comments per post, prioritizing top 50 comments per post using composite scoring (financial keywords, author trust, engagement, depth penalty), building parent chain context, and performing image analysis on post images. Includes comment deduplication to prevent redundant AI costs.
 
 ## Requirements Traced
 
 ### Core Reddit Integration
-- **FR-010**: Reddit API Integration via PRAW (top 10 hot posts, 1000 comments/post, prioritize 50)
+- **FR-010**: Reddit API Integration vian Async PRAW (top 10 hot posts, 1000 comments/post, prioritize 50)
 - **FR-011**: On-demand analysis (not scheduled)
 - **FR-038**: Comment deduplication by reddit_id (reuse stored annotations)
 - **FR-046**: Post image analysis via GPT-4o-mini vision (3 URL patterns, 3x retry with backoff)
-- **INT-REDDIT**: OAuth2 via env vars (60 req/min rate limit via PRAW)
+- **INT-REDDIT**: OAuth2 via env vars (60 req/min rate limit vian Async PRAW)
 
 ### Pipeline Implementation (Phase 1-2)
-- **PIPE-001**: Reddit authentication (PRAW OAuth2 from env vars)
+- **PIPE-001**: Reddit authentication (Async PRAW OAuth2 from env vars)
 - **PIPE-002**: Fetch top 10 hot posts from r/wallstreetbets
 - **PIPE-003**: Image detection (i.redd.it, imgur, preview.redd.it)
 - **PIPE-004**: Image analysis synchronously via GPT-4o-mini vision (charts, earnings, tickers)
@@ -40,7 +40,7 @@ Implement PRAW integration for fetching top 10 hot posts from r/wallstreetbets, 
 - **PIPE-014**: Attach parent chain context to selected comments
 
 ### Error Handling
-- **ERR-REDDIT-OUTAGE**: PRAW exception during fetch → log + return HTTP 503 (Tier 1)
+- **ERR-REDDIT-OUTAGE**: Async PRAW exception during fetch → log + return HTTP 503 (Tier 1)
 - **ERR-IMAGE-FAIL**: Retry 3x (2s, 5s, 10s), then log warning + set NULL + continue (Tier 3)
 
 ### Data Structures
@@ -57,7 +57,7 @@ Implement PRAW integration for fetching top 10 hot posts from r/wallstreetbets, 
 None directly (this is backend pipeline logic)
 
 ### External Integrations Involved
-- **Reddit API** via PRAW (OAuth2, rate limiting)
+- **Reddit API** vian Async PRAW (OAuth2, rate limiting)
 - **OpenAI GPT-4o-mini Vision** for image analysis (synchronous, retry logic)
 
 ### Key Algorithms/Logic
@@ -76,8 +76,8 @@ None directly (this is backend pipeline logic)
 **Complexity:** Medium-High
 
 **Key Risks:**
-1. **PRAW rate limiting**: 60 req/min may throttle 10 posts × 1000 comments (10k comments)
-   - *Mitigation*: PRAW handles rate limiting automatically with built-in backoff
+1. **Async PRAW rate limiting**: 60 req/min may throttle 10 posts × 1000 comments (10k comments)
+   - *Mitigation*: Async PRAW handles rate limiting automatically with built-in backoff
 2. **Image analysis latency**: Synchronous vision API calls add 2-5s per post with image
    - *Mitigation*: Only 10 posts max, acceptable for 30-minute total runtime
 3. **Parent chain complexity**: Recursive logic for threaded comments may be error-prone
@@ -93,11 +93,11 @@ None directly (this is backend pipeline logic)
 
 Resolved during Phase 1 planning questions:
 
-- **API Mocking:** VCR.py for recording/replaying PRAW API responses as cassettes in tests [qc-qa-003]
+- **API Mocking:** VCR.py for recording/replaying Async PRAW API responses as cassettes in tests [qc-qa-003]
 
 ## Estimated Stories
 
-1. **PRAW Authentication & Hot Posts Fetching**: OAuth2 setup, fetch top 10 hot posts
+1. **Async PRAW Authentication & Hot Posts Fetching**: OAuth2 setup, fetch top 10 hot posts
 2. **Image Detection & Vision Analysis**: Detect 3 image URL patterns, GPT-4o-mini vision with retry logic
 3. **Comment Fetching & Parent Chain Building**: Fetch 1000 comments/post, build parent chain arrays
 4. **Financial Keyword Scoring**: Implement keyword detection with density calculation

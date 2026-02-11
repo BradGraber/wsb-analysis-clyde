@@ -60,7 +60,7 @@
 - Phase A complete (database, connection manager, error utilities, API scaffold with seed data)
 
 **Exit Criteria:**
-- PRAW client authenticates and fetches top 10 hot posts from r/wallstreetbets
+- Async PRAW client authenticates and fetches top 10 hot posts from r/wallstreetbets
 - Image detection works for 3 URL patterns; GPT-4o-mini vision analysis with retry
 - Up to 1000 comments fetched per post with parent chain context
 - Priority scoring selects top 50 comments per post (~500 total)
@@ -77,7 +77,7 @@
 
 **Risk Notes:**
 - **OpenAI rate limiting (MEDIUM):** 429 responses may slow pipeline. Exponential backoff handles this.
-- **PRAW rate limiting (LOW):** PRAW handles 60 req/min automatically.
+- **Async PRAW rate limiting (LOW):** Async PRAW handles 60 req/min automatically.
 - **Malformed JSON responses (MEDIUM):** Retry once, skip on failure, log for review.
 - **Concurrent batching race conditions (MEDIUM):** Thread-safe data structures required.
 
@@ -281,7 +281,7 @@ epic-001 (Foundation)
     |
     v
 epic-002 (Reddit Pipeline)
-  task-002-001-01 (PRAW client, c2)
+  task-002-001-01 (Async PRAW client, c2)
   task-002-001-02 (Hot posts fetch, c2)
   task-002-003-01 (Comment fetch, c2)
   task-002-007-01 (Priority scoring, c2)
@@ -534,8 +534,8 @@ After stock exits (stories 001-004, 008-012) are complete, a velocity check is p
 **Story 002-008: Data Models** (start first -- no dependencies, consumed by all other epic-002 tasks)
 23. task-002-008-01 -- Define ProcessedPost, ProcessedComment, and ParentChainEntry data models [c1]
 
-**Story 002-001: PRAW Authentication & Hot Posts Fetching**
-24. task-002-001-01 -- Implement PRAW OAuth2 client initialization with environment variable validation [c2]
+**Story 002-001: Async PRAW Authentication & Hot Posts Fetching**
+24. task-002-001-01 -- Implement Async PRAW OAuth2 client initialization with environment variable validation [c2]
 25. task-002-001-02 -- Implement hot posts fetching with ProcessedPost construction [c2]
 
 **Story 002-002: Image Detection & Vision Analysis**
