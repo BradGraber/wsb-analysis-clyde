@@ -1,6 +1,6 @@
 # WSB Analysis Tool - Technical Brief
 
-**Version:** 3.6 | **Date:** 2026-02-07
+**Version:** 3.7 | **Date:** 2026-02-12
 
 ## System Architecture
 
@@ -27,7 +27,7 @@ Returns HTTP 202 with `run_id`, executes 7 phases in background thread (10-30 mi
 
 **Phase 3.5: Prediction Creation** — Batch Schwab options chain fetch/ticker. Create prediction per comment_ticker: strike delta ~0.30, 14-21 DTE (same logic as Phase 5). If no valid strike or Schwab unavailable: status='expired', append warning.
 
-**Phase 4: Signal Detection** — Group by ticker+signal_date (UTC day). **Quality:** >=2 users, reasoning=true, sarcasm=false, ai_confidence>=0.6, unanimous direction. **Consensus:** >=30 comments, >=8 users, >=70% alignment. Signal confidence = volume(25%) + alignment(25%) + avg_ai_confidence(30%) + avg_author_trust(20%). **Emergence:** ticker cold (<3 mentions in 7d) then hot (>=13 mentions, >=8 users), requires 7d history (else NULL). Upsert: UNIQUE(ticker, signal_type, signal_date).
+**Phase 4: Signal Detection** — Group by ticker+signal_date (UTC day). **Quality:** >=2 users, reasoning=true, ai_confidence>=0.6, unanimous direction (sarcasm_detected is metadata, not a filter — see PRD Deviations). **Consensus:** >=30 comments, >=8 users, >=70% alignment. Signal confidence = volume(25%) + alignment(25%) + avg_ai_confidence(30%) + avg_author_trust(20%). **Emergence:** ticker cold (<3 mentions in 7d) then hot (>=13 mentions, >=8 users), requires 7d history (else NULL). Upsert: UNIQUE(ticker, signal_type, signal_date).
 
 **Phase 5: Position Management** — Check market hours (9:30-16:00 ET); if outside, skip opens. Identify signals: confidence>=0.5, position_opened=false. Open in 2 portfolios/signal (stocks+options for that type). **Stocks long-only Phase 1:** Skip bearish for stock portfolios. Check limit (10/portfolio); if at limit, replace lowest-confidence if new exceeds by >0.1 AND lowest unrealized <=+5%. Cash guard: skip if cash_available < position_size. Calculate stop_loss_price, take_profit_price at creation. Set signal.position_opened=true (signal-level).
 
@@ -125,3 +125,15 @@ FastAPI (Python), SQLite, Vue.js 3 (Composition API), Async PRAW, OpenAI GPT-4o-
 **Out of Scope:** Automated trading, intraday/HFT, other subreddits, mobile, alerts, multi-user, production hardening, FR-022 Annotation Pattern Analysis.
 
 **Directory:** src/backend/ (FastAPI), src/frontend/ (Vue.js), src/data/ (SQLite, Schwab tokens), .env (API keys).
+
+## PRD Deviations
+
+### Sarcasm Filter in Quality Signals (FR-015)
+
+**PRD says:** Quality signals require `sarcasm_detected=false`.
+
+**Actual:** Quality signals do NOT filter on `sarcasm_detected`. The field is retained as metadata but not used as a gate.
+
+**Rationale:** Real data showed 47% sarcasm rate due to over-broad detection (WSB humor != sarcasm). Product owner decision: accuracy is insufficient for hard filtering; including both roughly offsets errors; the real predictive signal is bullish/bearish sentiment, not the sarcasm flag.
+
+**Phase-c impact:** When implementing story-004-002 / task-004-002-01, Quality signal filter should be: `has_reasoning=true AND ai_confidence >= quality_min_confidence` (Omit `sarcasm_detected=false`.)
