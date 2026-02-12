@@ -1,9 +1,72 @@
 #!/usr/bin/env bash
-# Clyde entry point — detects fresh clones and routes accordingly
+# Clyde entry point — scans project environment, then launches Claude Code
 
-# Trigger auto-compaction at 80% context to prevent mid-batch exhaustion
-export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80
+# Trigger auto-compaction at 90% context to prevent mid-batch exhaustion
+# Skip in dev mode — no orchestration loop, default threshold is fine
+if [ ! -f ".claude/rules/dev-mode.md" ]; then
+    export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=90
+fi
 
+# --- Generate .claude/rules/project-env.md (tiered doc system) ---
+# Skip in dev mode — docs/ contains framework templates, not project docs
+RULE_FILE=".claude/rules/project-env.md"
+if [ -f ".claude/rules/dev-mode.md" ]; then
+    rm -f "$RULE_FILE"
+else
+    PRIORITY_DOCS=""
+
+    # Detection rules: artifact → doc to promote to priority tier
+    VENV_DIR=""
+    if [ -d "project-workspace/venv" ]; then
+        VENV_DIR="venv"
+    elif [ -d "project-workspace/.venv" ]; then
+        VENV_DIR=".venv"
+    fi
+
+    if [ -n "$VENV_DIR" ]; then
+        PRIORITY_DOCS="docs/python-venv.md|Python venv detected at project-workspace/${VENV_DIR}/"
+    fi
+
+    # Collect all docs from both locations
+    ALL_DOCS=""
+    for f in docs/*.md input/docs/*.md; do
+        [ -f "$f" ] && ALL_DOCS="$ALL_DOCS $f"
+    done
+
+    # Write rule file if docs exist, otherwise clean up
+    if [ -n "$ALL_DOCS" ]; then
+        {
+            echo "# Project Context"
+            echo ""
+            echo "## Reference Documentation"
+            echo ""
+
+            # Priority tier (detected as relevant)
+            if [ -n "$PRIORITY_DOCS" ]; then
+                echo "**Priority — read before running related commands:**"
+                echo ""
+                IFS='|' read -r doc_path doc_reason <<< "$PRIORITY_DOCS"
+                echo "- \`${doc_path}\` — ${doc_reason}"
+                echo ""
+            fi
+
+            # Available tier (everything not in priority)
+            echo "**Available on demand:**"
+            echo ""
+            for f in $ALL_DOCS; do
+                if echo "$PRIORITY_DOCS" | grep -q "$f"; then
+                    continue
+                fi
+                echo "- \`$f\`"
+            done
+            echo ""
+        } > "$RULE_FILE"
+    else
+        rm -f "$RULE_FILE"
+    fi
+fi
+
+# --- Route to init or status ---
 if [ -f ".claude/rules/init-gate.md" ] && [ ! -f ".claude/rules/dev-mode.md" ]; then
     claude "/init"
 else

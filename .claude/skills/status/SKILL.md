@@ -51,6 +51,16 @@ python3 scripts/plan-ops.py next-task
 
 Use the output from these three commands to build the summary in step 3.
 
+### 2a. Detect Project Environment
+
+Check for runtime environment details to include in the summary:
+
+```bash
+ls -d project-workspace/venv project-workspace/.venv 2>/dev/null
+```
+
+If a Python venv is found, include the Environment section in the summary (step 3). The `./clyde` wrapper writes the durable rule file (`.claude/rules/project-env.md`) procedurally — `/status` only reports what it finds.
+
 ### 3. Present Summary
 
 Format a concise report. The `progress` command output includes phase lifecycle status (`pending`, `tests_written`, `in_progress`, `gate_pending`, `complete`) next to each phase name.
@@ -76,11 +86,14 @@ Pending Story Gates:
 Skipped:
   - [task-id]: [title] — [reason]
 
+Environment:
+  Python venv: project-workspace/venv/ — activate before all Python commands
+
 Suggested Next Action:
   → [what to do next]
 ```
 
-Note: "Pending Story Gates" and "In Progress" sections should only appear if there are items to show. To detect pending story gates, look for in-progress tasks reported by `progress`. The `resume-phase` command provides full detail if needed.
+Note: "Pending Story Gates", "In Progress", and "Environment" sections should only appear if there are items to show. To detect pending story gates, look for in-progress tasks reported by `progress`. The `resume-phase` command provides full detail if needed.
 
 ### 4. Suggest Next Action
 

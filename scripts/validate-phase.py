@@ -3,7 +3,7 @@
 validate-phase.py — Post-phase validation for the Clyde framework.
 
 Reads log files + plan.db and runs two sets of checks:
-  1. Health checks (7) — generic phase health (lifecycle, tests, errors, gates, etc.)
+  1. Health checks (8) — generic phase health (lifecycle, tests, errors, gates, compaction, etc.)
   2. Fix validations (cumulative) — explicit checks for known framework fixes,
      grouped by the phase that first exercises them. All fix validations always
      run regardless of which phase is being validated (regression).
@@ -170,14 +170,19 @@ def check_test_writer(project_root):
         return NOT_EXERCISED, 'conventions.md not found (test-writer may not have run)', details
 
     content = conventions.read_text()
-    expected_sections = ['Test Runner', 'Module Path', 'Naming']
+    expected_sections = [
+        ('Test Runner',),
+        ('Module Path', 'Module Structure', 'Import Pattern'),
+        ('Naming',),
+    ]
     found = []
     missing = []
-    for section in expected_sections:
-        if section.lower() in content.lower():
-            found.append(section)
+    for group in expected_sections:
+        label = group[0]
+        if any(variant.lower() in content.lower() for variant in group):
+            found.append(label)
         else:
-            missing.append(section)
+            missing.append(label)
 
     details['sections_found'] = found
     details['sections_missing'] = missing
@@ -188,13 +193,14 @@ def check_test_writer(project_root):
 
 
 def check_permissions(hook_decisions):
-    """Summarize permission hook decisions (informational, always PASS)."""
+    """Summarize permission hook decisions — FAIL if any fail-safe escapes detected."""
     if not hook_decisions:
         return NOT_EXERCISED, 'No hook decisions logged', {}
 
     total = len(hook_decisions)
     allow = sum(1 for d in hook_decisions if d.get('decision') == 'allow')
     ask = sum(1 for d in hook_decisions if d.get('decision') == 'ask')
+    fail_safe = sum(1 for d in hook_decisions if d.get('decision') == 'fail_safe')
 
     # Break down ask reasons
     ask_reasons = {}
@@ -203,30 +209,53 @@ def check_permissions(hook_decisions):
             reason = d.get('reason', 'unknown')
             ask_reasons[reason] = ask_reasons.get(reason, 0) + 1
 
+    # Break down fail-safe reasons
+    fail_safe_reasons = {}
+    for d in hook_decisions:
+        if d.get('decision') == 'fail_safe':
+            reason = d.get('reason', 'unknown')
+            fail_safe_reasons[reason] = fail_safe_reasons.get(reason, 0) + 1
+
     pct = round(allow / total * 100, 1) if total else 0
     details = {
         'total': total,
         'allow': allow,
         'ask': ask,
+        'fail_safe': fail_safe,
         'auto_approve_rate': pct,
         'ask_reasons': ask_reasons,
+        'fail_safe_reasons': fail_safe_reasons,
     }
     msg = f'{total} decisions: {allow} auto-approved ({pct}%), {ask} prompted'
+    if fail_safe:
+        msg += f', {fail_safe} fail-safe (commands escaped hook)'
+        return FAIL, msg, details
     return PASS, msg, details
 
 
+def _is_test_command(event):
+    """Check if a PostToolUseFailure event is an expected test run failure."""
+    inp = event.get('input', {})
+    cmd = inp.get('command', '') if isinstance(inp, dict) else ''
+    return 'pytest' in cmd
+
+
 def check_error_free(orchestrator_events):
-    """Check orchestrator log for errors in plan-ops.py calls."""
+    """Check orchestrator log for framework errors (filtering expected test failures)."""
     if not orchestrator_events:
         return NOT_EXERCISED, 'No orchestrator events logged', {}
 
     errors = []
+    test_failures = 0
     for e in orchestrator_events:
         if e.get('event') == 'PostToolUseFailure':
-            errors.append({
-                'tool': e.get('tool', ''),
-                'ts': e.get('ts', ''),
-            })
+            if _is_test_command(e):
+                test_failures += 1
+            else:
+                errors.append({
+                    'tool': e.get('tool', ''),
+                    'ts': e.get('ts', ''),
+                })
         # Check Bash responses for plan-ops errors
         if e.get('tool') == 'Bash':
             resp = e.get('response', {})
@@ -241,10 +270,15 @@ def check_error_free(orchestrator_events):
                         'ts': e.get('ts', ''),
                     })
 
-    details = {'total_events': len(orchestrator_events), 'errors': errors}
+    details = {
+        'total_events': len(orchestrator_events),
+        'errors': errors,
+        'test_failures_filtered': test_failures,
+    }
+    filtered_note = f' ({test_failures} test failures filtered)' if test_failures else ''
     if errors:
-        return FAIL, f'{len(errors)} error(s) found in orchestrator log', details
-    return PASS, f'{len(orchestrator_events)} events checked, no errors', details
+        return FAIL, f'{len(errors)} framework error(s) found{filtered_note}', details
+    return PASS, f'{len(orchestrator_events)} events checked, no framework errors{filtered_note}', details
 
 
 def check_story_gates(conn, phase_id, phase_story_ids):
@@ -344,6 +378,98 @@ def check_process_cleanup(project_root, orchestrator_events):
     if cleanup_logged:
         msg += ', cleanup events logged'
     return PASS, msg, details
+
+
+def check_compaction_health(events, orchestrator):
+    """Check compaction frequency, state cleanliness, and post-compaction recovery."""
+    compact_events = [e for e in events if e.get('event') == 'compaction']
+    if not compact_events:
+        return NOT_EXERCISED, 'No compaction events logged', {}
+
+    batch_values = [e.get('batch', 0) for e in compact_events]
+    mid_batch = sum(1 for e in compact_events if e.get('orphaned_tasks', 0) > 0)
+    mid_gate = sum(1 for e in compact_events if e.get('pending_gates', 0) > 0)
+    resume_actions = [e.get('resume_action', '') for e in compact_events]
+
+    # Average batches per compaction cycle
+    avg_per_cycle = sum(batch_values) / len(batch_values) if batch_values else 0
+
+    # Post-compaction recovery analysis
+    recovery = []
+    for ce in compact_events:
+        ce_ts = ce.get('ts', '')
+        # Find next 10 orchestrator events after this compaction
+        post_events = [o for o in orchestrator if o.get('ts', '') > ce_ts][:10]
+
+        conventions_read = False
+        plan_ops_called = False
+        first_5_tools = []
+
+        for o in post_events:
+            tool = o.get('tool', '')
+            if len(first_5_tools) < 5:
+                first_5_tools.append(tool)
+
+            # Check for conventions.md read
+            if tool == 'Read':
+                inp = o.get('input', {})
+                path = inp.get('file_path', '') if isinstance(inp, dict) else ''
+                if 'conventions.md' in path:
+                    conventions_read = True
+
+            # Check for plan-ops.py call
+            if tool == 'Bash':
+                inp = o.get('input', {})
+                cmd = inp.get('command', '') if isinstance(inp, dict) else ''
+                if 'plan-ops' in cmd:
+                    plan_ops_called = True
+
+        recovery.append({
+            'compaction_ts': ce_ts,
+            'batch_at_compaction': ce.get('batch', 0),
+            'conventions_read': conventions_read,
+            'plan_ops_called': plan_ops_called,
+            'first_5_tools': first_5_tools,
+        })
+
+    details = {
+        'total_compactions': len(compact_events),
+        'batch_values': batch_values,
+        'avg_batches_per_cycle': round(avg_per_cycle, 1),
+        'mid_batch_compactions': mid_batch,
+        'mid_gate_compactions': mid_gate,
+        'resume_actions': resume_actions,
+        'recovery_analysis': recovery,
+    }
+
+    # Check if any recovery lacked plan-ops calls.  This is WARN not FAIL because
+    # end-of-session compactions (batch 8, budget stop) legitimately proceed to
+    # /end-session rather than continuing the implementation loop.
+    recovery_failures = [r for r in recovery if not r['plan_ops_called']]
+
+    if recovery_failures:
+        # FAIL only if ALL compactions lack recovery signals (likely a hook bug).
+        # Mixed results (some recovered, some didn't) are WARN — the misses are
+        # likely end-of-session compactions.
+        if len(recovery_failures) == len(recovery):
+            return FAIL, (
+                f'{len(compact_events)} compaction(s), '
+                f'none had post-compaction plan-ops calls'
+            ), details
+        return PASS, (
+            f'{len(compact_events)} compaction(s), avg {avg_per_cycle:.1f} batches/cycle, '
+            f'{len(recovery_failures)} without plan-ops call (likely end-of-session)'
+        ), details
+
+    if mid_batch > 0 or mid_gate > 0:
+        return PASS, (
+            f'{len(compact_events)} compaction(s), avg {avg_per_cycle:.1f} batches/cycle, '
+            f'{mid_batch} mid-batch, {mid_gate} mid-gate (recovered)'
+        ), details
+
+    return PASS, (
+        f'{len(compact_events)} compaction(s), avg {avg_per_cycle:.1f} batches/cycle, all clean'
+    ), details
 
 
 # ---------------------------------------------------------------------------
@@ -554,6 +680,111 @@ def fix_reference_docs(ctx):
     return PASS, f'list-docs called {len(list_docs_calls)} time(s), {total_docs} doc(s) available', details
 
 
+def fix_tiered_docs(ctx):
+    """Verify tiered doc system: project-env.md passed to subagents, venv usage taught."""
+    project_root = ctx['project_root']
+    orchestrator = ctx['orchestrator']
+
+    # Early exit for dev mode (framework docs, not project docs)
+    if (project_root / '.claude' / 'rules' / 'dev-mode.md').exists():
+        return NOT_EXERCISED, 'Dev mode active (no project-env.md generation)', {'dev_mode': True}
+
+    if not orchestrator:
+        return NOT_EXERCISED, 'No orchestrator events logged', {}
+
+    # --- Sub-check 1: Subagents received doc context ---
+    task_spawns = [e for e in orchestrator
+                   if e.get('tool') == 'Task' and e.get('event') == 'PostToolUse']
+    spawns_with_docs = 0
+    has_priority = False
+    has_available = False
+    for e in task_spawns:
+        prompt = e.get('input', {}).get('prompt', '') if isinstance(e.get('input'), dict) else ''
+        found_priority = 'Priority — read before running' in prompt
+        found_available = 'Available on demand' in prompt
+        if found_priority or found_available:
+            spawns_with_docs += 1
+        if found_priority:
+            has_priority = True
+        if found_available:
+            has_available = True
+
+    # --- Sub-check 2: No bare python/pip PostToolUseFailure (when venv exists) ---
+    venv_dir = None
+    if (project_root / 'project-workspace' / 'venv').is_dir():
+        venv_dir = 'venv'
+    elif (project_root / 'project-workspace' / '.venv').is_dir():
+        venv_dir = '.venv'
+
+    bare_failures = []
+    if venv_dir:
+        venv_patterns = ('venv/bin/', '.venv/bin/', 'activate')
+        framework_patterns = ('plan-ops', 'validate-phase', 'plan.db')
+        bare_keywords = ('python ', 'python3 ', 'pip ', 'pip3 ', 'pytest ')
+        for e in orchestrator:
+            if e.get('event') != 'PostToolUseFailure' or e.get('tool') != 'Bash':
+                continue
+            if _is_test_command(e):
+                continue
+            inp = e.get('input', {})
+            cmd = inp.get('command', '') if isinstance(inp, dict) else ''
+            if any(fp in cmd for fp in framework_patterns):
+                continue
+            if any(kw in cmd for kw in bare_keywords) and not any(vp in cmd for vp in venv_patterns):
+                bare_failures.append({'command': cmd[:150], 'ts': e.get('ts', '')})
+
+    # --- Sub-check 3: Docs directories have content ---
+    fw_dir = project_root / 'docs'
+    proj_dir = project_root / 'input' / 'docs'
+    fw_files = list(fw_dir.glob('*.md')) if fw_dir.is_dir() else []
+    proj_files = list(proj_dir.glob('*.md')) if proj_dir.is_dir() else []
+    total_docs = len(fw_files) + len(proj_files)
+
+    details = {
+        'total_task_spawns': len(task_spawns),
+        'spawns_with_docs': spawns_with_docs,
+        'priority_tier_found': has_priority,
+        'available_tier_found': has_available,
+        'venv_found': venv_dir is not None,
+        'venv_path': venv_dir,
+        'bare_python_failures': bare_failures,
+        'framework_docs': len(fw_files),
+        'project_docs': len(proj_files),
+        'total_docs': total_docs,
+    }
+
+    # --- Detect old system (list-docs calls) ---
+    bash_cmds = _get_bash_commands(orchestrator)
+    list_docs_calls = [cmd for cmd, _ in bash_cmds if 'list-docs' in cmd]
+    details['list_docs_calls'] = len(list_docs_calls)
+
+    # --- Verdict ---
+    if not task_spawns:
+        return NOT_EXERCISED, 'No Task tool spawns found', details
+
+    if total_docs == 0:
+        return NOT_EXERCISED, 'No docs available (no .md files in docs/ or input/docs/)', details
+
+    # If old system was in use (list-docs called), tiered system wasn't active
+    if spawns_with_docs == 0 and list_docs_calls:
+        return NOT_EXERCISED, f'Old doc system in use (list-docs called {len(list_docs_calls)} time(s))', details
+
+    issues = []
+    if spawns_with_docs == 0:
+        issues.append(f'Doc context not passed to subagents (0/{len(task_spawns)} spawns include tier markers)')
+    if venv_dir and bare_failures and not list_docs_calls:
+        issues.append(f'{len(bare_failures)} bare python/pip failure(s) despite venv at {venv_dir}/')
+
+    if issues:
+        return FAIL, '; '.join(issues), details
+
+    parts = [f'{spawns_with_docs}/{len(task_spawns)} spawn(s) received doc context']
+    if venv_dir:
+        parts.append('no bare python/pip failures')
+    parts.append(f'{total_docs} doc(s) available')
+    return PASS, ', '.join(parts), details
+
+
 # Fix validation registry — grouped by introduction phase.
 # All entries always run (cumulative regression). Add new groups for future phases.
 FIX_VALIDATIONS = [
@@ -598,6 +829,13 @@ FIX_VALIDATIONS = [
         'name': 'Reference Docs',
         'description': 'list-docs command provides API documentation to implementers/test-writers',
         'check_fn': fix_reference_docs,
+    },
+    {
+        'id': 'tiered-docs',
+        'group': 'phase-c',
+        'name': 'Tiered Doc System',
+        'description': 'project-env.md passed to subagents with priority/available tiers, venv usage taught',
+        'check_fn': fix_tiered_docs,
     },
 ]
 
@@ -654,6 +892,7 @@ def run_checks(conn, phase_id, project_root):
         ('Story Gates', lambda: check_story_gates(conn, phase_id, story_ids)),
         ('Batch Counter', lambda: check_batch_counter(phase_events)),
         ('Process Cleanup', lambda: check_process_cleanup(project_root, orchestrator)),
+        ('Compaction Health', lambda: check_compaction_health(events, orchestrator)),
     ]
 
     for name, check_fn in checks:

@@ -584,7 +584,7 @@ Auto-compaction fires when the context window fills up. By default this can caus
 
 The orchestrator can continue working after compaction because all critical state is reconstructed from durable sources.
 
-**Recommended:** Set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80` in your environment. This triggers compaction at 80% capacity instead of the default 95%, giving 20% headroom for a higher-quality summary.
+**Recommended:** Set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=90` in your environment. This triggers compaction at 90% capacity instead of the default 95%, giving 10% headroom for the PreCompact hook to inject state before the context limit.
 
 ### Layer 2: Safety Budget (backstop)
 

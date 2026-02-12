@@ -59,4 +59,7 @@ List anything that needs attention next session:
 - Unresolved questions
 - Next logical step
 
+If this session was ended because the batch budget was reached (Step 9 of the implementation loop), include this as the first open item:
+- **Reset context before continuing:** Run `/clear` to reset the context window, then `/resume` to pick up where you left off. No need to exit Claude Code. (Run `/status` first if you want a broader progress overview before diving back in.)
+
 Present all of this to the user as a clear end-of-session report.

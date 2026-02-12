@@ -23,11 +23,16 @@ Usage:
   python3 scripts/plan-ops.py phase-status PHASE_ID
   python3 scripts/plan-ops.py verify-intake --expected-epics N --expected-stories N --expected-tasks N
   python3 scripts/plan-ops.py resume-phase PHASE_ID
-  python3 scripts/plan-ops.py update-phase PHASE_ID --status STATUS
+  python3 scripts/plan-ops.py update-phase PHASE_ID [--status STATUS] [--goal G] [--entry-criteria EC] [--exit-criteria XC]
   python3 scripts/plan-ops.py update-story-gate STORY_ID --status STATUS
   python3 scripts/plan-ops.py active-phase
   python3 scripts/plan-ops.py list-docs
   python3 scripts/plan-ops.py batch-check [--reset] [--budget N]
+  python3 scripts/plan-ops.py schema
+  python3 scripts/plan-ops.py show ITEM_ID
+  python3 scripts/plan-ops.py update-task TASK_ID [--title T] [--description D] [--acceptance-criteria AC]
+  python3 scripts/plan-ops.py update-story STORY_ID [--title T] [--description D]
+  python3 scripts/plan-ops.py update-epic EPIC_ID [--title T] [--description D]
 """
 
 import argparse
@@ -1132,14 +1137,9 @@ def cmd_resume_phase(conn, phase_id):
     print(json.dumps(result, indent=2))
 
 
-def cmd_update_phase(conn, phase_id, status):
-    """Update phase lifecycle status."""
-    valid = ('pending', 'tests_written', 'in_progress', 'gate_pending', 'complete')
-    if status not in valid:
-        print(f'ERROR: invalid status "{status}". '
-              f'Must be one of: {", ".join(valid)}', file=sys.stderr)
-        sys.exit(1)
-
+def cmd_update_phase(conn, phase_id, status=None, goal=None,
+                     entry_criteria=None, exit_criteria=None):
+    """Update phase lifecycle status and/or content fields."""
     phase = conn.execute(
         'SELECT id, name FROM phases WHERE id = ?', (phase_id,)
     ).fetchone()
@@ -1147,14 +1147,44 @@ def cmd_update_phase(conn, phase_id, status):
         print(f'ERROR: phase {phase_id} not found', file=sys.stderr)
         sys.exit(1)
 
-    conn.execute(
-        'UPDATE phases SET status = ? WHERE id = ?', (status, phase_id)
-    )
+    fields, values, updated = [], [], []
+
+    if status is not None:
+        valid = ('pending', 'tests_written', 'in_progress', 'gate_pending', 'complete')
+        if status not in valid:
+            print(f'ERROR: invalid status "{status}". '
+                  f'Must be one of: {", ".join(valid)}', file=sys.stderr)
+            sys.exit(1)
+        fields.append('status = ?'); values.append(status); updated.append('status')
+    if goal is not None:
+        fields.append('goal = ?'); values.append(goal); updated.append('goal')
+    if entry_criteria is not None:
+        fields.append('entry_criteria = ?'); values.append(entry_criteria); updated.append('entry_criteria')
+    if exit_criteria is not None:
+        fields.append('exit_criteria = ?'); values.append(exit_criteria); updated.append('exit_criteria')
+
+    if not fields:
+        print('ERROR: no fields to update. Use --status, --goal, --entry-criteria, or --exit-criteria.',
+              file=sys.stderr)
+        sys.exit(1)
+
+    values.append(phase_id)
+    conn.execute(f'UPDATE phases SET {", ".join(fields)} WHERE id = ?', values)
     conn.commit()
 
-    emit_event('phase_updated', {'phase_id': phase_id, 'status': status})
+    emit_event('phase_updated', {
+        'phase_id': phase_id,
+        'status': status,
+        'fields': updated,
+    })
 
-    print(f'Phase {phase_id} ({phase["name"]}): status → {status}')
+    if status and len(updated) == 1:
+        print(f'Phase {phase_id} ({phase["name"]}): status → {status}')
+    elif status:
+        content_fields = [f for f in updated if f != 'status']
+        print(f'Phase {phase_id} ({phase["name"]}): status → {status}, updated {", ".join(content_fields)}')
+    else:
+        print(f'Phase {phase_id} ({phase["name"]}): updated {", ".join(updated)}')
 
 
 def cmd_list_docs(project_root):
@@ -1201,6 +1231,146 @@ def cmd_update_story_gate(conn, story_id, status):
     emit_event('story_gate_updated', {'story_id': story_id, 'status': status})
 
     print(f'Story {story_id} ({story["title"]}): gate_status → {status}')
+
+
+def cmd_schema(conn):
+    """Dump database table names, column names, and types as JSON."""
+    tables_raw = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        r"AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '\_%' ESCAPE '\' "
+        "ORDER BY name"
+    ).fetchall()
+
+    tables = {}
+    for t in tables_raw:
+        cols = conn.execute(f"PRAGMA table_info({t['name']})").fetchall()
+        tables[t['name']] = [
+            {'name': c['name'], 'type': c['type'], 'notnull': bool(c['notnull']),
+             'pk': bool(c['pk'])}
+            for c in cols
+        ]
+
+    print(json.dumps({'tables': tables}, indent=2))
+
+
+def cmd_show(conn, item_id):
+    """Show all fields for any item by ID (auto-detects type from prefix)."""
+    prefix_map = {
+        'epic-': 'epics',
+        'story-': 'stories',
+        'task-': 'tasks',
+        'phase-': 'phases',
+    }
+
+    table = None
+    for prefix, tbl in prefix_map.items():
+        if item_id.startswith(prefix):
+            table = tbl
+            break
+
+    if not table:
+        print(f'ERROR: cannot detect type from ID "{item_id}". '
+              f'Expected prefix: {", ".join(prefix_map.keys())}', file=sys.stderr)
+        sys.exit(1)
+
+    row = conn.execute(f'SELECT * FROM {table} WHERE id = ?', (item_id,)).fetchone()
+    if not row:
+        print(f'ERROR: {item_id} not found in {table}', file=sys.stderr)
+        sys.exit(1)
+
+    print(json.dumps(dict(row), indent=2))
+
+
+def cmd_update_task(conn, task_id, title=None, description=None, acceptance_criteria=None):
+    """Update content fields on a task."""
+    task = conn.execute(
+        'SELECT id, title, status FROM tasks WHERE id = ?', (task_id,)
+    ).fetchone()
+    if not task:
+        print(f'ERROR: task {task_id} not found', file=sys.stderr)
+        sys.exit(1)
+
+    if task['status'] == 'complete':
+        print(f'WARNING: updating completed task {task_id}', file=sys.stderr)
+
+    fields, values, updated = [], [], []
+    if title is not None:
+        fields.append('title = ?'); values.append(title); updated.append('title')
+    if description is not None:
+        fields.append('description = ?'); values.append(description); updated.append('description')
+    if acceptance_criteria is not None:
+        fields.append('acceptance_criteria = ?'); values.append(acceptance_criteria); updated.append('acceptance_criteria')
+
+    if not fields:
+        print('ERROR: no fields to update. Use --title, --description, or --acceptance-criteria.', file=sys.stderr)
+        sys.exit(1)
+
+    values.append(task_id)
+    conn.execute(f'UPDATE tasks SET {", ".join(fields)} WHERE id = ?', values)
+    conn.commit()
+
+    emit_event('task_content_updated', {'task_id': task_id, 'fields': updated})
+    print(f'Updated: {task_id} — {", ".join(updated)}')
+
+
+def cmd_update_story(conn, story_id, title=None, description=None):
+    """Update content fields on a story."""
+    story = conn.execute(
+        'SELECT id, title, status FROM stories WHERE id = ?', (story_id,)
+    ).fetchone()
+    if not story:
+        print(f'ERROR: story {story_id} not found', file=sys.stderr)
+        sys.exit(1)
+
+    if story['status'] == 'complete':
+        print(f'WARNING: updating completed story {story_id}', file=sys.stderr)
+
+    fields, values, updated = [], [], []
+    if title is not None:
+        fields.append('title = ?'); values.append(title); updated.append('title')
+    if description is not None:
+        fields.append('description = ?'); values.append(description); updated.append('description')
+
+    if not fields:
+        print('ERROR: no fields to update. Use --title or --description.', file=sys.stderr)
+        sys.exit(1)
+
+    values.append(story_id)
+    conn.execute(f'UPDATE stories SET {", ".join(fields)} WHERE id = ?', values)
+    conn.commit()
+
+    emit_event('story_content_updated', {'story_id': story_id, 'fields': updated})
+    print(f'Updated: {story_id} — {", ".join(updated)}')
+
+
+def cmd_update_epic(conn, epic_id, title=None, description=None):
+    """Update content fields on an epic."""
+    epic = conn.execute(
+        'SELECT id, title, status FROM epics WHERE id = ?', (epic_id,)
+    ).fetchone()
+    if not epic:
+        print(f'ERROR: epic {epic_id} not found', file=sys.stderr)
+        sys.exit(1)
+
+    if epic['status'] == 'complete':
+        print(f'WARNING: updating completed epic {epic_id}', file=sys.stderr)
+
+    fields, values, updated = [], [], []
+    if title is not None:
+        fields.append('title = ?'); values.append(title); updated.append('title')
+    if description is not None:
+        fields.append('description = ?'); values.append(description); updated.append('description')
+
+    if not fields:
+        print('ERROR: no fields to update. Use --title or --description.', file=sys.stderr)
+        sys.exit(1)
+
+    values.append(epic_id)
+    conn.execute(f'UPDATE epics SET {", ".join(fields)} WHERE id = ?', values)
+    conn.commit()
+
+    emit_event('epic_content_updated', {'epic_id': epic_id, 'fields': updated})
+    print(f'Updated: {epic_id} — {", ".join(updated)}')
 
 
 # ---------------------------------------------------------------------------
@@ -1275,12 +1445,15 @@ if __name__ == '__main__':
     p_resume = sub.add_parser('resume-phase', help='Detect session resume state for a phase')
     p_resume.add_argument('phase_id', help='Phase ID')
 
-    p_uphase = sub.add_parser('update-phase', help='Update phase lifecycle status')
+    p_uphase = sub.add_parser('update-phase', help='Update phase status or content')
     p_uphase.add_argument('phase_id', help='Phase ID')
-    p_uphase.add_argument('--status', required=True,
+    p_uphase.add_argument('--status',
                           choices=['pending', 'tests_written', 'in_progress',
                                    'gate_pending', 'complete'],
                           help='New phase status')
+    p_uphase.add_argument('--goal', help='New phase goal')
+    p_uphase.add_argument('--entry-criteria', help='New entry criteria')
+    p_uphase.add_argument('--exit-criteria', help='New exit criteria')
 
     p_ugate = sub.add_parser('update-story-gate', help='Update story gate review status')
     p_ugate.add_argument('story_id', help='Story ID')
@@ -1299,6 +1472,27 @@ if __name__ == '__main__':
                          help='Reset counter to 0 instead of incrementing')
     p_batch.add_argument('--budget', type=int, default=8,
                          help='Batch budget (default: 8)')
+
+    sub.add_parser('schema', help='Show database table structure (JSON)')
+
+    p_show = sub.add_parser('show', help='Inspect any item by ID (JSON)')
+    p_show.add_argument('item_id', help='Item ID (auto-detects type from prefix)')
+
+    p_utask = sub.add_parser('update-task', help='Update task content fields')
+    p_utask.add_argument('task_id', help='Task ID')
+    p_utask.add_argument('--title', help='New task title')
+    p_utask.add_argument('--description', help='New task description')
+    p_utask.add_argument('--acceptance-criteria', help='New acceptance criteria')
+
+    p_ustory = sub.add_parser('update-story', help='Update story content fields')
+    p_ustory.add_argument('story_id', help='Story ID')
+    p_ustory.add_argument('--title', help='New story title')
+    p_ustory.add_argument('--description', help='New story description')
+
+    p_uepic = sub.add_parser('update-epic', help='Update epic content fields')
+    p_uepic.add_argument('epic_id', help='Epic ID')
+    p_uepic.add_argument('--title', help='New epic title')
+    p_uepic.add_argument('--description', help='New epic description')
 
     args = parser.parse_args()
 
@@ -1349,10 +1543,27 @@ if __name__ == '__main__':
     elif args.command == 'resume-phase':
         cmd_resume_phase(conn, args.phase_id)
     elif args.command == 'update-phase':
-        cmd_update_phase(conn, args.phase_id, args.status)
+        cmd_update_phase(conn, args.phase_id, status=args.status,
+                         goal=args.goal,
+                         entry_criteria=args.entry_criteria,
+                         exit_criteria=args.exit_criteria)
     elif args.command == 'update-story-gate':
         cmd_update_story_gate(conn, args.story_id, args.status)
     elif args.command == 'active-phase':
         cmd_active_phase(conn)
+    elif args.command == 'schema':
+        cmd_schema(conn)
+    elif args.command == 'show':
+        cmd_show(conn, args.item_id)
+    elif args.command == 'update-task':
+        cmd_update_task(conn, args.task_id, title=args.title,
+                        description=args.description,
+                        acceptance_criteria=args.acceptance_criteria)
+    elif args.command == 'update-story':
+        cmd_update_story(conn, args.story_id, title=args.title,
+                         description=args.description)
+    elif args.command == 'update-epic':
+        cmd_update_epic(conn, args.epic_id, title=args.title,
+                        description=args.description)
 
     conn.close()

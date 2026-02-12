@@ -7,6 +7,8 @@ A reusable framework for Claude Code-driven software development. Clone it fresh
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed and authenticated
 - [Python 3](https://www.python.org/) (3.8+, no external dependencies required)
 - [SQLite3](https://www.sqlite.org/) installed and on your PATH (used for plan storage and progress tracking)
+- [jq](https://jqlang.github.io/jq/) (JSON processing in hook scripts)
+- `flock` from [util-linux](https://github.com/util-linux/util-linux) (file locking for concurrent hook log writes — pre-installed on most Linux distributions)
 - A pre-built project plan consisting of:
   - A Product Requirements Document (PRD)
   - Epics, stories, and tasks as markdown files with YAML frontmatter
@@ -117,7 +119,7 @@ Clyde auto-approves safe Bash commands during implementation to avoid constant p
 
 The deny list covers: recursive deletes (`rm -rf`), superuser commands (`sudo`), destructive git operations (`push --force`, `reset --hard`, `clean -f`, `checkout .`, `restore .`, `branch -D`). You can customize the deny list by editing the hook script.
 
-If the hook fails to run (missing `jq`, script error), Claude Code falls back to its normal permission system using the patterns in `.claude/settings.json`.
+If the hook fails to run (missing `jq` or `flock`, script error), Claude Code falls back to its normal permission system using the patterns in `.claude/settings.json`.
 
 ### Recommended Environment
 

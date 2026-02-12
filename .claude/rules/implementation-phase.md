@@ -56,11 +56,26 @@ python3 scripts/plan-ops.py phase-status PHASE_ID
 # Detect session resume state for a phase (returns JSON with routing)
 python3 scripts/plan-ops.py resume-phase PHASE_ID
 
-# Update phase lifecycle status
-python3 scripts/plan-ops.py update-phase PHASE_ID --status STATUS
+# Update phase lifecycle status and/or content
+python3 scripts/plan-ops.py update-phase PHASE_ID [--status STATUS] [--goal G] [--entry-criteria EC] [--exit-criteria XC]
 
 # Record story gate review result
 python3 scripts/plan-ops.py update-story-gate STORY_ID --status STATUS
+
+# Show database schema (table names, columns, types — JSON)
+python3 scripts/plan-ops.py schema
+
+# Inspect any item by ID (auto-detects type from prefix — JSON)
+python3 scripts/plan-ops.py show ITEM_ID
+
+# Update task content (title, description, acceptance criteria)
+python3 scripts/plan-ops.py update-task TASK_ID [--title T] [--description D] [--acceptance-criteria AC]
+
+# Update story content (title, description)
+python3 scripts/plan-ops.py update-story STORY_ID [--title T] [--description D]
+
+# Update epic content (title, description)
+python3 scripts/plan-ops.py update-epic EPIC_ID [--title T] [--description D]
 
 # Find the currently active phase (JSON — used by PreCompact hook and /resume)
 python3 scripts/plan-ops.py active-phase
@@ -106,12 +121,12 @@ The main conversation acts as an **orchestrator**. Files changed per task are tr
 
 ### 2. Write Tests
 
-Run `plan-ops.py phase-stories PHASE_ID`, `plan-ops.py phase-tasks PHASE_ID`, and `plan-ops.py list-docs` to get all stories, tasks, and available reference documentation. Then spawn **test-writer** agent (model: **sonnet**) with:
+Run `plan-ops.py phase-stories PHASE_ID` and `plan-ops.py phase-tasks PHASE_ID` to get all stories and tasks. Then spawn **test-writer** agent (model: **sonnet**) with:
 - The story acceptance criteria from `phase-stories` output
 - The task descriptions from `phase-tasks` output (structural hints — file paths, naming patterns, config keys)
 - Phase exit criteria (from `phase-status` in step 1)
 - `output/technical-brief.md`
-- The `all_docs` list from `list-docs` output (the test-writer can read specific docs on demand for API response shapes, etc.)
+- If `.claude/rules/project-env.md` exists, include its content (project context and doc listing written by the `./clyde` wrapper — subagents don't inherit rules files)
 
 The test-writer produces test files that define "done" for this phase, plus `project-workspace/tests/conventions.md` documenting structural decisions (module paths, naming conventions, import patterns). All tests are expected to fail initially — no implementation exists yet. Note the test runner command for use in steps 8 and 10.
 
@@ -149,9 +164,9 @@ plan-ops.py start-task TASK_ID
 
 ### 5. Spawn Implementers
 
-Spawn **one implementer subagent per task** (model: **sonnet**), all in a **single message** (parallel Task calls). Each receives its own task context JSON + `output/technical-brief.md`. If `project-workspace/tests/conventions.md` exists (produced by the test-writer in Step 2), include it as additional context — it documents the structural conventions implementers should follow.
+Spawn **one implementer subagent per task** (model: **sonnet**), all in a **single message** (parallel Task calls). Each receives its own task context JSON + `output/technical-brief.md`. If `project-workspace/tests/conventions.md` exists (produced by the test-writer in Step 2), include it as additional context — it documents the structural conventions implementers should follow, including environment setup (e.g., venv activation) if applicable.
 
-Also include the `all_docs` list from `plan-ops.py list-docs` (gathered in Step 2 or re-run here). Do not read or include the file contents — implementers will read specific docs on demand if their task involves an external API or library feature.
+If `.claude/rules/project-env.md` exists, include its content (project context and doc listing — subagents don't inherit rules files).
 
 All implementers return a JSON report with: `status` (COMPLETE / BLOCKED / PARTIAL), `files_changed` (array), `criteria` (array with `met` boolean), `concerns` (array with `level`: blocker/warning/info), and `blocked_reason`.
 
@@ -225,12 +240,12 @@ python3 scripts/plan-ops.py batch-check
 
 This returns JSON: `{"batch": N, "budget": 8, "stop": false}`. The command increments the counter, writes it to disk, and checks the budget — all procedurally.
 
-- **If `stop` is `true`:** Run `/end-session` to wrap up cleanly (summarize progress, offer git commit, update memory). The end-session report should list "Run `/resume` to continue" in open items. **Stop — do not proceed to Step 3.**
+- **If `stop` is `true`:** Run `/end-session` to wrap up cleanly (summarize progress, offer git commit, update memory). The end-session report should include clear instructions: **"Run `/clear` to reset context, then `/resume` to continue."** Explain briefly that multiple compaction cycles degrade context quality, and `/clear` gives a fresh window while preserving env vars and rules. Optionally mention `/status` for a broader progress overview before resuming. **Stop — do not proceed to Step 3.**
 - **If `stop` is `false`:** Go to Step 3 for the next batch.
 
 #### Auto-Compaction
 
-Auto-compaction may fire between batches (recommended: set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80`). The PreCompact hook (`.claude/hooks/pre-compact.sh`) re-injects critical state from plan.db and durable files. After compaction:
+Auto-compaction may fire between batches (recommended: set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=90`). The PreCompact hook (`.claude/hooks/pre-compact.sh`) re-injects critical state from plan.db and durable files. After compaction:
 - Re-read `project-workspace/tests/conventions.md` for the test runner command and conventions
 - Continue the execution loop from Step 3
 
@@ -299,5 +314,6 @@ python3 scripts/plan-ops.py update-phase PHASE_ID --status complete
 - Skipped tasks prevent their parent story from auto-completing — this is correct behavior
 - The batch counter is managed by `batch-check` (file-based at `output/.session-batch-count`) — procedural, survives compaction
 - Auto-compaction is handled by the PreCompact hook (`.claude/hooks/pre-compact.sh`) which re-injects critical state from plan.db
-- Static batch budget of 8 is a safety net — compaction handles the typical case. `/end-session` + `/resume` handle the budget-exceeded case
+- Static batch budget of 8 is a safety net — compaction handles the typical case. `/end-session` + `/clear` + `/resume` handle the budget-exceeded case
+- When the batch budget is reached, `/clear` + `/resume` is sufficient to continue — no need to exit Claude Code. `/clear` resets the context window and reloads CLAUDE.md and rules files; env vars from `./clyde` persist in the same process. `/status` is available for a broader overview but not required — `/resume` reports the active phase state before entering the loop
 - Test commands that `cd` into subdirectories must use subshell syntax `(cd ... && command)` to prevent CWD drift — bare `cd ... && command` shifts CWD for all subsequent Bash calls, breaking relative `plan-ops.py` invocations
