@@ -1,6 +1,6 @@
 # WSB Analysis Tool - Backend API
 
-Phase A (Foundation) implementation: database schema, REST API, Schwab OAuth spike, and seed data.
+Reddit sentiment analysis pipeline for r/wallstreetbets. Fetches posts and comments, scores them by financial relevance, and runs GPT-4o-mini sentiment analysis with ticker extraction.
 
 ## Quick Start
 
@@ -52,7 +52,7 @@ The API runs on `http://localhost:8000`. Interactive docs at `http://localhost:8
 python -m pytest tests/ -v
 ```
 
-209 tests pass. 6 skip (Schwab integration tests that require API credentials).
+376 tests collected. 3 skip (Schwab OAuth flow requires manual browser interaction).
 
 ## API Endpoints
 
@@ -169,6 +169,20 @@ curl http://localhost:8000/portfolios/1
 curl http://localhost:8000/positions/1
 ```
 
+## Data Pipeline
+
+The analysis pipeline runs in four stages:
+
+1. **Fetch** (`reddit.py`) — Connects to Reddit via Async PRAW and pulls the top 10 hot posts from r/wallstreetbets with up to 1,000 comments each. Detects image posts and analyzes them with GPT-4o-mini vision.
+
+2. **Score** (`scoring.py`) — Ranks comments by financial relevance using keyword matching, author trust scores, and engagement metrics (upvotes, reply count). Selects the top 50 comments per post for AI analysis.
+
+3. **Store** (`storage.py`) — Writes posts and scored comments to SQLite in atomic transactions. Deduplicates by `reddit_id` so re-runs skip already-stored content.
+
+4. **Analyze** (`ai_client.py`, `ai_batch.py`, `ai_parser.py`, `prompts.py`, `ai_dedup.py`) — Sends comments to GPT-4o-mini for sentiment analysis and ticker extraction. Processes in concurrent batches of 5 with retry logic. Skips comments that already have annotations (dedup). Normalizes tickers and maps WSB slang to symbols (e.g., "the mouse" to DIS).
+
+The pipeline orchestrator that chains these stages together is not yet built — individual modules can be called programmatically.
+
 ## Project Structure
 
 ```
@@ -176,6 +190,16 @@ project-workspace/
   data/wsb.db              # SQLite database (auto-created)
   scripts/seed_data.py     # Seed test data for development
   src/
+    reddit.py              # Async PRAW client — fetch posts, comments, image detection
+    scoring.py             # Comment priority scoring (financial keywords, engagement, trust)
+    storage.py             # Atomic post/comment storage with deduplication
+    ai_client.py           # OpenAI GPT-4o-mini wrapper with cost tracking
+    ai_dedup.py            # Skip AI calls for already-annotated comments
+    ai_parser.py           # Parse AI JSON responses, normalize tickers
+    ai_batch.py            # Concurrent batch processing with retry
+    prompts.py             # WSB-tuned sentiment analysis prompt templates
+    models/
+      reddit_models.py     # ProcessedPost, ProcessedComment, ParentChainEntry
     api/
       app.py               # FastAPI app (lifespan, CORS, exception handlers)
       models.py            # Pydantic models (ResponseEnvelope, PaginationParams, etc.)
@@ -201,7 +225,7 @@ project-workspace/
       utils/
         errors.py          # retry_with_backoff(), WarningsCollector
         logging_config.py  # Structlog JSON logging setup
-  tests/                   # 209 behavioral tests
+  tests/                   # 376 behavioral tests
 ```
 
 ## Scripts
@@ -284,7 +308,7 @@ Copy `.env.example` to `.env` and fill in the values you need. Not all variables
 
 Create a Reddit "script" app at https://www.reddit.com/prefs/apps to get these credentials.
 
-### OpenAI API (Phase C: AI Analysis)
+### OpenAI API (Phase B: AI Analysis)
 
 | Variable | Required | Description |
 |----------|----------|-------------|

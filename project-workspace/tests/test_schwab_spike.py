@@ -24,6 +24,8 @@ import json
 import stat
 from pathlib import Path
 
+from src.backend.integrations.schwab import DEFAULT_TOKEN_PATH
+
 
 class TestSchwabModuleStructure:
     """Verify Schwab module structure exists."""
@@ -215,28 +217,57 @@ class TestGitignore:
 
 
 @pytest.mark.schwab_api
+@pytest.mark.skipif(
+    not Path(DEFAULT_TOKEN_PATH).exists(),
+    reason="Schwab token file not found — run schwab_setup.py first"
+)
 class TestSchwabAPIIntegration:
     """
     Tests that require actual Schwab API credentials.
-    These are marked with @pytest.mark.schwab_api and will be skipped
-    unless run with: pytest -m schwab_api
+    Skipped automatically when the token file is missing.
     """
 
     def test_oauth_flow_completes(self):
         """OAuth flow should complete and return valid tokens."""
-        pytest.skip("Requires manual OAuth flow and valid Schwab credentials")
+        pytest.skip("Requires manual browser-based OAuth flow")
 
     def test_stock_quote_fetch_works(self):
         """Should be able to fetch stock quote with valid credentials."""
-        pytest.skip("Requires valid Schwab credentials and API access")
+        from src.backend.integrations.schwab import SchwabClient
+
+        client = SchwabClient()
+        quote_data = client.get_stock_quote("AAPL")
+
+        assert "AAPL" in quote_data, "Response should contain AAPL key"
+        ticker_data = quote_data["AAPL"]
+        assert "quote" in ticker_data, "Ticker data should contain quote key"
+        quote = ticker_data["quote"]
+        for field in ["lastPrice", "bidPrice", "askPrice"]:
+            assert field in quote, f"Quote should contain {field}"
 
     def test_options_chain_fetch_works(self):
         """Should be able to fetch options chain with valid credentials."""
-        pytest.skip("Requires valid Schwab credentials and API access")
+        from src.backend.integrations.schwab import SchwabClient
+
+        client = SchwabClient()
+        options_data = client.get_options_chain(
+            "AAPL", dte_min=14, dte_max=21,
+            includeUnderlyingQuote=True, strategy="ANALYTICAL"
+        )
+
+        assert "callExpDateMap" in options_data, "Response should contain callExpDateMap"
+        assert "putExpDateMap" in options_data, "Response should contain putExpDateMap"
 
     def test_token_refresh_works_with_api(self):
         """Token refresh should work with actual Schwab API."""
-        pytest.skip("Requires valid Schwab refresh token")
+        from src.backend.integrations.schwab import refresh_token
+
+        updated_token = refresh_token()
+
+        required_fields = ["access_token", "refresh_token", "expires_at", "refresh_expires_at"]
+        for field in required_fields:
+            assert field in updated_token, f"Refreshed token should contain {field}"
+        assert updated_token["access_token"], "Access token should be non-empty"
 
 
 class TestDefaultTokenPath:
