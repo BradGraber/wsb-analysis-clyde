@@ -10,13 +10,13 @@ Code organization based on task descriptions and functional grouping:
 - **`src/reddit.py`** — Main Reddit integration module
   - `get_reddit_client()` — Async PRAW client initialization with OAuth2
   - `fetch_hot_posts()` — Fetch top 10 hot posts from r/wallstreetbets
-  - `detect_image_url()` — Pattern matching for i.redd.it, imgur, preview.redd.it
-  - `analyze_post_image()` — GPT-4o-mini vision analysis with retry
+  - `detect_image_urls()` — 4-level cascade: direct URL, url_overridden_by_dest, media_metadata, preview
+  - `analyze_post_images()` — GPT-4o-mini vision analysis with retry, multi-image concatenation
   - `fetch_comments()` — Up to 1000 comments per post, engagement-sorted
   - `build_parent_chains()` — Build parent chain context for nested comments
 
 - **`src/models/reddit_models.py`** — Data models for Reddit entities
-  - `ProcessedPost` — 8 fields: reddit_id, title, selftext, upvotes, total_comments, image_url, image_analysis, comments
+  - `ProcessedPost` — 8 fields: reddit_id, title, selftext, upvotes, total_comments, image_urls, image_analysis, comments
   - `ProcessedComment` — 11 fields: reddit_id, post_id, author, body, score, depth, created_utc, priority_score, financial_score, author_trust_score, parent_chain
   - `ParentChainEntry` — 4 fields: id, body, depth, author
 
@@ -78,7 +78,7 @@ Code organization based on task descriptions and functional grouping:
 - `OPENAI_API_KEY` — OpenAI API key
 
 ### Database Columns (from schema.sql)
-- `reddit_posts`: reddit_id, title, selftext, upvotes, total_comments, image_url, image_analysis, fetched_at
+- `reddit_posts`: reddit_id, title, selftext, upvotes, total_comments, image_urls, image_analysis, fetched_at
 - `comments`: analysis_run_id, post_id, reddit_id, author, body, created_utc, score, depth, prioritization_score, sentiment, sarcasm_detected, has_reasoning, reasoning_summary, ai_confidence, author_trust_score, analyzed_at, parent_comment_id
 - `comment_tickers`: comment_id (FK to comments.id), ticker (uppercase VARCHAR), sentiment, created_at
 
@@ -303,7 +303,7 @@ class ProcessedPost:
     selftext: str
     upvotes: int
     total_comments: int
-    image_url: Optional[str] = None
+    image_urls: List[str] = field(default_factory=list)
     image_analysis: Optional[str] = None
     comments: List[ProcessedComment] = field(default_factory=list)
 ```

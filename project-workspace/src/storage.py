@@ -123,7 +123,7 @@ def store_posts_and_comments(conn: sqlite3.Connection, run_id: int, posts: List[
         ...     'selftext': 'Body text',
         ...     'upvotes': 1000,
         ...     'total_comments': 500,
-        ...     'image_url': None,
+        ...     'image_urls': [],
         ...     'image_analysis': None,
         ...     'comments': [
         ...         {
@@ -145,9 +145,13 @@ def store_posts_and_comments(conn: sqlite3.Connection, run_id: int, posts: List[
     for post in posts:
         try:
             # Insert or get existing post
+            # Serialize image_urls list to JSON for storage
+            image_urls_raw = post.get('image_urls', [])
+            image_urls_json = json.dumps(image_urls_raw) if image_urls_raw else None
+
             post_cursor = conn.execute("""
                 INSERT INTO reddit_posts (reddit_id, title, selftext, upvotes, total_comments,
-                                         image_url, image_analysis, fetched_at)
+                                         image_urls, image_analysis, fetched_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
                 ON CONFLICT(reddit_id) DO UPDATE SET
                     upvotes = excluded.upvotes,
@@ -160,7 +164,7 @@ def store_posts_and_comments(conn: sqlite3.Connection, run_id: int, posts: List[
                 post['selftext'],
                 post['upvotes'],
                 post['total_comments'],
-                post.get('image_url'),
+                image_urls_json,
                 post.get('image_analysis')
             ))
 

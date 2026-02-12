@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS reddit_posts (
     selftext TEXT,
     upvotes INT,
     total_comments INT,
-    image_url TEXT,
+    image_urls TEXT,
     image_analysis TEXT,
     fetched_at TIMESTAMP
 );

@@ -4,7 +4,7 @@ This module defines the data structures used throughout the Reddit data pipeline
 (Phase 2: Acquisition & Prioritization) and AI analysis pipeline (Phase 3: AI Analysis).
 
 Data Models:
-    ProcessedPost — 8 fields representing a Reddit post with metadata
+    ProcessedPost — 8 fields representing a Reddit post with metadata (image_urls supports galleries)
     ProcessedComment — 11 fields representing a Reddit comment with scoring annotations
     ParentChainEntry — 4 fields representing a single parent comment in the chain
 
@@ -84,8 +84,8 @@ class ProcessedPost:
         selftext: Post body text (empty for image/link posts)
         upvotes: Reddit upvote count
         total_comments: Total comment count from Reddit API
-        image_url: URL of detected image (i.redd.it, imgur, preview.redd.it)
-        image_analysis: GPT-4o-mini vision analysis text (if image detected)
+        image_urls: List of detected image URLs (supports galleries)
+        image_analysis: GPT-4o-mini vision analysis text (concatenated for multi-image)
         comments: List of ProcessedComment objects (top N after prioritization)
     """
     reddit_id: str
@@ -93,6 +93,6 @@ class ProcessedPost:
     selftext: str
     upvotes: int
     total_comments: int
-    image_url: Optional[str] = None
+    image_urls: List[str] = field(default_factory=list)
     image_analysis: Optional[str] = None
     comments: List[ProcessedComment] = field(default_factory=list)

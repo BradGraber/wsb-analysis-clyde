@@ -111,7 +111,7 @@ def seed_reddit_posts(conn):
     for reddit_id, title, selftext, upvotes, comments, img_url, img_analysis, fetched in posts_data:
         cursor.execute("""
             INSERT OR IGNORE INTO reddit_posts
-            (reddit_id, title, selftext, upvotes, total_comments, image_url, image_analysis, fetched_at)
+            (reddit_id, title, selftext, upvotes, total_comments, image_urls, image_analysis, fetched_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (reddit_id, title, selftext, upvotes, comments, img_url, img_analysis, fetched))
 

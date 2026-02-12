@@ -148,7 +148,7 @@ class TestPostAndCommentStorage:
             'selftext': 'Post body text',
             'upvotes': 5000,
             'total_comments': 1200,
-            'image_url': 'https://i.redd.it/test.png',
+            'image_urls': ['https://i.redd.it/test.png'],
             'image_analysis': 'Image shows chart going up',
             'comments': []
         }
@@ -158,14 +158,15 @@ class TestPostAndCommentStorage:
         # Verify post inserted
         row = seeded_db.execute("""
             SELECT reddit_id, title, selftext, upvotes, total_comments,
-                   image_url, image_analysis
+                   image_urls, image_analysis
             FROM reddit_posts WHERE reddit_id = 'newpost123'
         """).fetchone()
 
         assert row is not None
         assert row['title'] == 'New Post Title'
         assert row['upvotes'] == 5000
-        assert row['image_url'] == 'https://i.redd.it/test.png'
+        import json
+        assert json.loads(row['image_urls']) == ['https://i.redd.it/test.png']
         assert row['image_analysis'] == 'Image shows chart going up'
 
     def test_new_comment_insert_with_metadata_and_parent_chain(self, seeded_db):
@@ -186,7 +187,7 @@ class TestPostAndCommentStorage:
             'selftext': 'Body',
             'upvotes': 100,
             'total_comments': 10,
-            'image_url': None,
+            'image_urls': [],
             'image_analysis': None,
             'comments': [
                 {
@@ -232,7 +233,7 @@ class TestPostAndCommentStorage:
             'selftext': 'Valid',
             'upvotes': 100,
             'total_comments': 10,
-            'image_url': None,
+            'image_urls': [],
             'image_analysis': None,
             'comments': []
         }
@@ -244,7 +245,7 @@ class TestPostAndCommentStorage:
             'selftext': 'Invalid',
             'upvotes': 50,
             'total_comments': 5,
-            'image_url': None,
+            'image_urls': [],
             'image_analysis': None,
             'comments': []
         }
@@ -290,7 +291,7 @@ class TestDataModels:
             selftext='Test body',
             upvotes=1000,
             total_comments=500,
-            image_url=None,
+            image_urls=[],
             image_analysis=None,
             comments=[]
         )
@@ -300,7 +301,7 @@ class TestDataModels:
         assert post.selftext == 'Test body'
         assert post.upvotes == 1000
         assert post.total_comments == 500
-        assert post.image_url is None
+        assert post.image_urls == []
         assert post.image_analysis is None
         assert post.comments == []
 

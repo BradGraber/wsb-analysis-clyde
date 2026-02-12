@@ -89,6 +89,9 @@ class TestHotPostsFetching:
             sub.score = 1000 - i
             sub.num_comments = 500 - i
             sub.url = f'https://reddit.com/r/test/{i}'
+            del sub.url_overridden_by_dest
+            del sub.media_metadata
+            del sub.preview
             mock_submissions.append(sub)
 
         # subreddit.hot() returns an async iterator directly (not a coroutine)
@@ -119,6 +122,11 @@ class TestHotPostsFetching:
         mock_sub.score = 5000
         mock_sub.num_comments = 1200
         mock_sub.url = 'https://reddit.com/r/wallstreetbets/test'
+        # Prevent MagicMock from auto-creating these as truthy attributes
+        # when detect_image_urls() checks hasattr()
+        del mock_sub.url_overridden_by_dest
+        del mock_sub.media_metadata
+        del mock_sub.preview
 
         async def async_iter(limit=10):
             yield mock_sub
@@ -136,7 +144,7 @@ class TestHotPostsFetching:
         assert hasattr(post, 'selftext')
         assert hasattr(post, 'upvotes')
         assert hasattr(post, 'total_comments')
-        assert hasattr(post, 'image_url')
+        assert hasattr(post, 'image_urls')
         assert hasattr(post, 'image_analysis')
         assert hasattr(post, 'comments')
 
@@ -145,7 +153,7 @@ class TestHotPostsFetching:
         assert post.selftext == 'Test body text'
         assert post.upvotes == 5000
         assert post.total_comments == 1200
-        assert post.image_url is None  # Default when no image
+        assert post.image_urls == []  # Default when no image
         assert post.image_analysis is None  # Default when no image
         assert post.comments == []  # Empty list initially
 
@@ -181,6 +189,9 @@ class TestHotPostsFetching:
             sub.score = 100
             sub.num_comments = 50
             sub.url = f'https://reddit.com/test/{i}'
+            del sub.url_overridden_by_dest
+            del sub.media_metadata
+            del sub.preview
             mock_submissions.append(sub)
 
         async def async_iter(limit=10):

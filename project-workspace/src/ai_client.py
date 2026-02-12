@@ -162,7 +162,7 @@ class OpenAIClient:
                         "content": [
                             {
                                 "type": "text",
-                                "text": "Extract visual context from this image, focusing on: stock charts, earnings data, ticker symbols, price targets, and financial information. Provide a concise description."
+                                "text": "Analyze this WallStreetBets image. Report ONLY what is present:\n- Ticker symbols and positions (shares, cost basis, current value, P&L)\n- Chart patterns or trends with timeframes\n- Key numbers (prices, percentages, dates)\n- Meme context if trading-relevant\n\nBe extremely concise. Omit categories with no findings. No introductions or conclusions."
                             },
                             {
                                 "type": "image_url",

@@ -4,11 +4,12 @@ This module provides Async PRAW client initialization and data fetching
 functionality for r/wallstreetbets content acquisition.
 """
 
+import html
 import os
 import asyncio
 import asyncpraw
 import structlog
-from typing import Optional
+from typing import List, Optional
 
 from src.models.reddit_models import ProcessedPost, ProcessedComment, ParentChainEntry
 
@@ -82,70 +83,105 @@ async def get_reddit_client() -> asyncpraw.Reddit:
         ) from e
 
 
-def detect_image_url(submission) -> Optional[str]:
-    """Detect if a submission contains an image URL from supported hosting patterns.
+def detect_image_urls(submission) -> List[str]:
+    """Extract all image URLs from a Reddit submission using a 4-level priority cascade.
 
-    Inspects the submission's URL attribute (or URL string directly) and returns it
-    if it matches one of three supported image hosting patterns: i.redd.it, imgur,
-    or preview.redd.it.
+    For gallery posts with media_metadata, returns ALL images.
+    For single-image posts, returns a list with one URL.
+
+    Priority order:
+    1. Direct URL if it's an image file (i.redd.it, i.imgur.com, or image extension)
+    2. url_overridden_by_dest if it's an image
+    3. media_metadata for gallery posts (returns ALL images)
+    4. preview.redd.it images (transform to i.redd.it, skip external-preview)
 
     Args:
-        submission: Either an Async PRAW Submission object with a `.url` attribute,
-            or a URL string directly
+        submission: An Async PRAW Submission object with URL attributes
 
     Returns:
-        Optional[str]: The URL string if it matches a supported image pattern,
-            otherwise None
+        List[str]: List of image URLs (empty if no images detected)
 
     Example:
         >>> submission.url = "https://i.redd.it/abc123.jpg"
-        >>> detect_image_url(submission)
-        'https://i.redd.it/abc123.jpg'
-
-        >>> detect_image_url("https://i.redd.it/abc123.jpg")
-        'https://i.redd.it/abc123.jpg'
+        >>> detect_image_urls(submission)
+        ['https://i.redd.it/abc123.jpg']
 
         >>> submission.url = "https://www.youtube.com/watch?v=abc"
-        >>> detect_image_url(submission)
-        None
+        >>> detect_image_urls(submission)
+        []
     """
-    # Handle both string URLs and submission objects
-    if isinstance(submission, str):
-        url = submission
-    else:
+    IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp")
+    IMAGE_DOMAINS = ["i.redd.it", "i.imgur.com"]
+
+    # 1. Check direct URL for image (single image)
+    if hasattr(submission, "url") and submission.url:
         url = submission.url
+        # Direct image link (i.redd.it, i.imgur.com)
+        if any(domain in url for domain in IMAGE_DOMAINS):
+            # Skip imgur albums/galleries
+            if "imgur.com/a/" not in url and "imgur.com/gallery/" not in url:
+                return [url]
+        # URL ending with image extension
+        elif url.lower().endswith(IMAGE_EXTENSIONS):
+            return [url]
 
-    # Check for three supported image hosting patterns
-    if "i.redd.it" in url or "imgur" in url or "preview.redd.it" in url:
-        return url
+    # 2. Check url_overridden_by_dest (single image)
+    if hasattr(submission, "url_overridden_by_dest") and submission.url_overridden_by_dest:
+        url = submission.url_overridden_by_dest
+        # Skip imgur albums/galleries
+        if "imgur.com/a/" in url or "imgur.com/gallery/" in url:
+            pass
+        elif any(domain in url for domain in IMAGE_DOMAINS) or url.lower().endswith(IMAGE_EXTENSIONS):
+            return [url]
 
-    return None
+    # 3. Check media_metadata (gallery posts - ALL images)
+    if hasattr(submission, "media_metadata") and submission.media_metadata:
+        urls = []
+        try:
+            for media_id, media_data in submission.media_metadata.items():
+                if "s" in media_data and "u" in media_data["s"]:
+                    url = html.unescape(media_data["s"]["u"])
+                    # Transform: remove query params, replace preview→i.redd.it
+                    url = url.split("?")[0].replace("preview.redd.it", "i.redd.it")
+                    urls.append(url)
+            if urls:
+                return urls
+        except (KeyError, TypeError, AttributeError):
+            pass
+
+    # 4. Check preview (single image, only regular preview.redd.it)
+    if hasattr(submission, "preview") and submission.preview:
+        try:
+            images = submission.preview.get("images", [])
+            if images:
+                source_url = images[0].get("source", {}).get("url")
+                if source_url:
+                    url = html.unescape(source_url)
+                    # Skip external-preview (proxied external images)
+                    if "external-preview.redd.it" in url:
+                        return []
+                    # Transform regular preview.redd.it URLs
+                    if "preview.redd.it" in url:
+                        url = url.split("?")[0].replace("preview.redd.it", "i.redd.it")
+                        return [url]
+        except (KeyError, IndexError, TypeError):
+            pass
+
+    return []
 
 
-async def analyze_post_image(image_url: str, reddit_id: str = "unknown") -> Optional[str]:
-    """Analyze an image URL using GPT-4o-mini vision API with retry logic.
+async def _analyze_single_image(image_url: str, reddit_id: str = "unknown") -> Optional[str]:
+    """Analyze a single image URL using GPT-4o-mini vision API with retry logic.
 
-    Sends an image URL to the OpenAI GPT-4o-mini vision API to extract visual context
-    (charts, earnings data, tickers from screenshots). Implements exponential backoff
-    retry logic with delays of [2, 5, 10] seconds. On complete failure after 3 retries,
-    logs a warning and returns None for graceful degradation.
+    Implements exponential backoff retry logic with delays of [2, 5, 10] seconds.
+    On complete failure after 3 retries, logs a warning and returns None.
 
     Args:
-        image_url: URL of the image to analyze (i.redd.it, imgur, or preview.redd.it)
+        image_url: URL of the image to analyze
         reddit_id: Reddit post ID for logging context (default: "unknown")
 
     Returns:
         Optional[str]: Image analysis text on success, None on failure after retries
-
-    Example:
-        >>> analysis = await analyze_post_image("https://i.redd.it/chart.png", "abc123")
-        >>> print(analysis)
-        'A stock chart showing SPY rising from $400 to $450...'
-
-        >>> # On failure after retries
-        >>> analysis = await analyze_post_image("https://i.redd.it/broken.png", "xyz789")
-        >>> print(analysis)
-        None
     """
     # Import inside function to allow test mocking
     from src.ai_client import OpenAIClient
@@ -153,9 +189,10 @@ async def analyze_post_image(image_url: str, reddit_id: str = "unknown") -> Opti
     retry_delays = [2, 5, 10]  # Custom delays in seconds for 3 retries
     func_logger = structlog.get_logger()
 
+    client = OpenAIClient()
+
     for attempt in range(3):
         try:
-            client = OpenAIClient()
             result = await client.send_vision_analysis(image_url)
             return result['content']
 
@@ -185,6 +222,42 @@ async def analyze_post_image(image_url: str, reddit_id: str = "unknown") -> Opti
             await asyncio.sleep(delay)
 
 
+async def analyze_post_images(image_urls: List[str], reddit_id: str = "unknown") -> Optional[str]:
+    """Analyze multiple image URLs and concatenate descriptions.
+
+    Analyzes each image individually via GPT-4o-mini vision API.
+    Single description returned as-is; multiple descriptions joined with double newline.
+
+    Args:
+        image_urls: List of image URLs to analyze
+        reddit_id: Reddit post ID for logging context (default: "unknown")
+
+    Returns:
+        Optional[str]: Concatenated analysis text, or None if all analyses fail
+
+    Example:
+        >>> analysis = await analyze_post_images(["https://i.redd.it/chart.png"], "abc123")
+        >>> print(analysis)
+        'A stock chart showing SPY rising from $400 to $450...'
+    """
+    if not image_urls:
+        return None
+
+    descriptions = []
+    for url in image_urls:
+        description = await _analyze_single_image(url, reddit_id)
+        if description:
+            descriptions.append(description)
+
+    if not descriptions:
+        return None
+
+    if len(descriptions) == 1:
+        return descriptions[0]
+
+    return "\n\n".join(descriptions)
+
+
 async def fetch_hot_posts(
     reddit: asyncpraw.Reddit,
     subreddit_name: str = "wallstreetbets",
@@ -203,7 +276,7 @@ async def fetch_hot_posts(
         limit: Maximum number of posts to fetch (default: 10)
 
     Returns:
-        list[ProcessedPost]: List of ProcessedPost objects with image_url and
+        list[ProcessedPost]: List of ProcessedPost objects with image_urls and
             image_analysis populated for posts with detected images (may be fewer
             than `limit` if fewer posts are available)
 
@@ -216,8 +289,8 @@ async def fetch_hot_posts(
         >>> posts = await fetch_hot_posts(client, limit=5)
         >>> print(len(posts), posts[0].title)
         >>> # Posts with images will have image_url and image_analysis populated
-        >>> if posts[0].image_url:
-        ...     print(f"Image: {posts[0].image_url}")
+        >>> if posts[0].image_urls:
+        ...     print(f"Images: {posts[0].image_urls}")
         ...     print(f"Analysis: {posts[0].image_analysis}")
     """
     try:
@@ -225,13 +298,13 @@ async def fetch_hot_posts(
         posts = []
 
         async for submission in subreddit.hot(limit=limit):
-            # Detect image URL
-            image_url = detect_image_url(submission)
+            # Detect image URLs (supports galleries)
+            image_urls = detect_image_urls(submission)
 
-            # Analyze image if detected
+            # Analyze images if detected
             image_analysis = None
-            if image_url:
-                image_analysis = await analyze_post_image(image_url, submission.id)
+            if image_urls:
+                image_analysis = await analyze_post_images(image_urls, submission.id)
 
             # Map Async PRAW Submission attributes to ProcessedPost fields
             processed_post = ProcessedPost(
@@ -240,7 +313,7 @@ async def fetch_hot_posts(
                 selftext=submission.selftext,
                 upvotes=submission.score,
                 total_comments=submission.num_comments,
-                image_url=image_url,
+                image_urls=image_urls,
                 image_analysis=image_analysis,
                 comments=[]
             )
@@ -251,7 +324,7 @@ async def fetch_hot_posts(
             subreddit=subreddit_name,
             requested_limit=limit,
             fetched_count=len(posts),
-            posts_with_images=sum(1 for p in posts if p.image_url is not None)
+            posts_with_images=sum(1 for p in posts if p.image_urls)
         )
         return posts
 

@@ -6,6 +6,9 @@
 data/schwab_token.json
 data/*.json
 
+# Pipeline intermediate data
+data/pipeline/
+
 # Database files
 data/*.db
 data/*.db-wal
