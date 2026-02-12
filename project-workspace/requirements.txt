@@ -11,6 +11,11 @@ structlog>=25.5.0
 fastapi>=0.115.0
 uvicorn>=0.32.0
 
+# Phase B (Data Pipeline + AI Analysis) dependencies
+asyncpraw>=7.8.1
+openai>=1.59.0
+
 # Testing
 pytest>=9.0.0
+pytest-asyncio>=0.24.0
 httpx>=0.28.0

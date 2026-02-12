@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS authors (
     avg_sentiment_accuracy FLOAT,
     total_upvotes INT,
     flagged_comments INT,
-    last_active TIMESTAMP
+    last_active TIMESTAMP,
+    trust_score REAL DEFAULT 0.5
 );
 
 -- =============================================================================
@@ -186,6 +187,7 @@ CREATE TABLE IF NOT EXISTS comments (
     ai_confidence FLOAT,
     author_trust_score FLOAT,
     analyzed_at TIMESTAMP,
+    parent_chain TEXT,
     FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs(id),
     FOREIGN KEY (post_id) REFERENCES reddit_posts(id) ON DELETE RESTRICT,
     FOREIGN KEY (parent_comment_id) REFERENCES comments(id)
