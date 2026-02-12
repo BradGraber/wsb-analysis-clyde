@@ -78,8 +78,8 @@ async def run_fetch(limit: int, comments: int, skip_images: bool, output: str):
         await reddit.close()
 
         # Serialize
-        images_found = sum(1 for p in posts if p.image_urls)
-        images_analyzed = sum(1 for p in posts if p.image_analysis)
+        images_found = sum(len(p.image_urls) for p in posts)
+        images_analyzed = sum(len(p.image_urls) for p in posts if p.image_analysis)
 
         output_data = {
             "metadata": {
