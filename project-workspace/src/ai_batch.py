@@ -15,6 +15,7 @@ Key Functions:
     store_comment_tickers — Junction table persistence
 """
 
+import json
 import sqlite3
 import structlog
 from typing import Any, Dict, List, Optional, Tuple
@@ -257,6 +258,11 @@ def store_analysis_results(
         post_db_id = result['post_id']  # This is already the DB FK
         author_trust_score = result.get('author_trust_score', 0.5)
 
+        # Normalize reasoning_summary — AI may return dict/list instead of string
+        reasoning_summary = result.get('reasoning_summary')
+        if reasoning_summary is not None and not isinstance(reasoning_summary, str):
+            reasoning_summary = json.dumps(reasoning_summary)
+
         # Check if comment exists
         existing_cursor = conn.execute(
             "SELECT id, author_trust_score FROM comments WHERE reddit_id = ?",
@@ -280,7 +286,7 @@ def store_analysis_results(
                 result.get('sentiment'),
                 result.get('sarcasm_detected', False),
                 result.get('has_reasoning', False),
-                result.get('reasoning_summary'),
+                reasoning_summary,
                 result.get('ai_confidence'),
                 reddit_id
             ))
@@ -315,7 +321,7 @@ def store_analysis_results(
                 result.get('sentiment'),
                 result.get('sarcasm_detected', False),
                 result.get('has_reasoning', False),
-                result.get('reasoning_summary'),
+                reasoning_summary,
                 result.get('ai_confidence'),
                 author_trust_score  # Phase 2 snapshot, NOT a new lookup
             ))
