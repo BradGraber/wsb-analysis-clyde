@@ -290,7 +290,10 @@ class OpenAIClient:
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
-                ]
+                ],
+                temperature=0.3,
+                max_tokens=500,
+                response_format={"type": "json_object"},
             )
 
             # Extract content and token usage

@@ -52,7 +52,7 @@ The API runs on `http://localhost:8000`. Interactive docs at `http://localhost:8
 python -m pytest tests/ -v
 ```
 
-376 tests collected. 3 skip (Schwab OAuth flow requires manual browser interaction).
+404 tests collected. 3 skip (Schwab OAuth flow requires manual browser interaction).
 
 ## API Endpoints
 
@@ -179,7 +179,7 @@ The analysis pipeline runs in four stages:
 
 3. **Store** (`storage.py`) — Writes posts and scored comments to SQLite in atomic transactions. Deduplicates by `reddit_id` so re-runs skip already-stored content.
 
-4. **Analyze** (`ai_client.py`, `ai_batch.py`, `ai_parser.py`, `prompts.py`, `ai_dedup.py`) — Sends comments to GPT-4o-mini for sentiment analysis and ticker extraction. Processes in concurrent batches of 5 with retry logic. Skips comments that already have annotations (dedup). Normalizes tickers and maps WSB slang to symbols (e.g., "the mouse" to DIS).
+4. **Analyze** (`ai_client.py`, `ai_batch.py`, `ai_parser.py`, `prompts.py`, `ai_dedup.py`, `market_context.py`) — Fetches market index data (SPY, QQQ, IWM) to provide context on volatile days, then sends comments to GPT-4o-mini (temperature=0.3, JSON mode) for sentiment analysis and ticker extraction. Processes in concurrent batches of 5 with retry logic. Skips comments that already have annotations (dedup). Normalizes tickers and maps WSB slang to symbols (e.g., "the mouse" to DIS).
 
 The pipeline orchestrator that chains these stages together is not yet built — individual modules can be called programmatically.
 
@@ -225,7 +225,7 @@ project-workspace/
       utils/
         errors.py          # retry_with_backoff(), WarningsCollector
         logging_config.py  # Structlog JSON logging setup
-  tests/                   # 376 behavioral tests
+  tests/                   # 404 behavioral tests
 ```
 
 ## Scripts

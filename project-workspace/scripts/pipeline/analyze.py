@@ -36,12 +36,13 @@ _load_dotenv()
 
 from src.ai_dedup import partition_for_analysis
 from src.ai_batch import process_comments_in_batches, commit_analysis_batch
+from src.market_context import fetch_market_context, format_market_context, should_include_context
 
 
 # GPT-4o-mini pricing (per 1M tokens)
 COST_PER_1M_INPUT = 0.15
 COST_PER_1M_OUTPUT = 0.60
-AVG_PROMPT_TOKENS = 500
+AVG_PROMPT_TOKENS = 550
 AVG_COMPLETION_TOKENS = 100
 
 
@@ -101,11 +102,29 @@ async def run_analysis(input_path: str, db_path: str, skip_confirm: bool):
             conn.close()
             return
 
+    # Fetch market context for reactive/predictive differentiation
+    market_context_str = None
+    print("\nFetching market index data...")
+    try:
+        market_data = fetch_market_context()
+        if market_data and should_include_context(market_data):
+            market_context_str = format_market_context(market_data)
+            print(f"  {market_context_str}")
+        elif market_data:
+            today = market_data["today"]
+            moves = ", ".join(f"{t}: {p:+.2f}%" for t, p in today.items())
+            print(f"  Flat day ({moves}) — market context not included")
+        else:
+            print("  Could not fetch market data — proceeding without context")
+    except Exception as e:
+        print(f"  Market context fetch failed ({e}) — proceeding without context")
+
     # Run AI analysis
     print(f"\nProcessing {len(analyze_list)} comments in batches of 5...")
     start_time = time.time()
 
-    results = await process_comments_in_batches(analyze_list, run_id)
+    results = await process_comments_in_batches(analyze_list, run_id,
+                                                market_context=market_context_str)
 
     elapsed = time.time() - start_time
     successful = len(results)

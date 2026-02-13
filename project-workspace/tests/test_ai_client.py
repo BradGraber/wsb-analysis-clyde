@@ -58,9 +58,12 @@ class TestChatCompletionRequests:
                     user_prompt="Test question"
                 )
 
-                # Verify called with correct model
+                # Verify called with correct model and parameters
                 call_kwargs = mock_client.chat.completions.create.call_args[1]
                 assert call_kwargs['model'] == 'gpt-4o-mini'
+                assert call_kwargs['temperature'] == 0.3
+                assert call_kwargs['max_tokens'] == 500
+                assert call_kwargs['response_format'] == {"type": "json_object"}
 
     @pytest.mark.asyncio
     async def test_returns_raw_content_and_token_usage(self):

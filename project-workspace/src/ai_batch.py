@@ -61,7 +61,8 @@ async def process_comment_with_retry(
     openai_client: Any,
     run_id: int,
     system_prompt: Optional[str] = None,
-    user_prompt: Optional[str] = None
+    user_prompt: Optional[str] = None,
+    market_context: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """Process a single comment with retry logic for malformed JSON and rate limits.
 
@@ -107,7 +108,8 @@ async def process_comment_with_retry(
             parent_chain_formatted=comment.get('parent_chain_formatted', ''),
             author=comment.get('author', 'unknown'),
             author_trust=comment.get('author_trust_score', 0.5),
-            comment_body=comment.get('body', '')
+            comment_body=comment.get('body', ''),
+            market_context=market_context,
         )
 
     reddit_id = comment.get('reddit_id', 'unknown')
@@ -336,7 +338,8 @@ def store_analysis_results(
 async def process_single_batch(
     comments: List[Dict[str, Any]],
     openai_client: Any,
-    run_id: int
+    run_id: int,
+    market_context: Optional[str] = None
 ) -> List[Tuple[Dict[str, Any], Any]]:
     """Process a single batch of comments concurrently using ThreadPoolExecutor.
 
@@ -366,7 +369,8 @@ async def process_single_batch(
             try:
                 # Call process_comment_with_retry (handles malformed JSON and rate limit retries)
                 result = loop.run_until_complete(
-                    process_comment_with_retry(comment, openai_client, run_id)
+                    process_comment_with_retry(comment, openai_client, run_id,
+                                              market_context=market_context)
                 )
 
                 # If result is None, the comment was skipped after retries
@@ -542,7 +546,8 @@ async def process_comments_in_batches(
     comments: List[Dict[str, Any]],
     run_id: int,
     db_conn: Optional[sqlite3.Connection] = None,
-    openai_client: Optional[Any] = None
+    openai_client: Optional[Any] = None,
+    market_context: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """Main orchestrator for concurrent AI batch processing.
 
@@ -609,7 +614,8 @@ async def process_comments_in_batches(
         )
 
         # Process this batch concurrently
-        batch_results = await process_single_batch(batch, openai_client, run_id)
+        batch_results = await process_single_batch(batch, openai_client, run_id,
+                                                   market_context=market_context)
 
         # Collect results
         all_results.extend(batch_results)

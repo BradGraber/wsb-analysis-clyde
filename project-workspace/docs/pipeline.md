@@ -164,7 +164,7 @@ python scripts/pipeline/store.py --db-path ./data/test.db
 
 ### analyze.py — Stage 4: AI Sentiment Analysis
 
-Sends comments to GPT-4o-mini for sentiment analysis and ticker extraction. Shows a cost estimate before proceeding.
+Sends comments to GPT-4o-mini for sentiment analysis and ticker extraction. Automatically fetches market index data (SPY, QQQ, IWM) to provide context — on volatile days (any index moved >= 0.8%), market context is injected into each prompt to help the model distinguish reactive venting from predictive sentiment. Shows a cost estimate before proceeding.
 
 ```bash
 python scripts/pipeline/analyze.py [OPTIONS]

@@ -23,7 +23,7 @@ Returns HTTP 202 with `run_id`, executes 7 phases in background thread (10-30 mi
 
 **Phase 2: Prioritization** — Score: financial keyword density (0.4) + author trust (0.3) + engagement (0.3) - depth penalty. Select top 50 comments/post (~500 total).
 
-**Phase 3: Analysis** — Check dedup by `reddit_id`: if exists, reuse annotations, UPDATE `analysis_run_id`. If new: OpenAI GPT-4o-mini individual call (1 comment/call), parse JSON (tickers, ticker_sentiments, sentiment, sarcasm_detected, has_reasoning, confidence, reasoning_summary). Commit batches of 5 (cost protection). Store per-ticker sentiment in `comment_tickers`.
+**Phase 3: Analysis** — Check dedup by `reddit_id`: if exists, reuse annotations, UPDATE `analysis_run_id`. If new: fetch market index context (SPY, QQQ, IWM via yfinance — today's move + 5-day trend); gate: only inject into prompt if any index moved >=0.8%. OpenAI GPT-4o-mini individual call (1 comment/call, temperature=0.3, response_format=json_object, max_tokens=500), parse JSON (tickers, ticker_sentiments, sentiment, sarcasm_detected, has_reasoning, confidence, reasoning_summary). Commit batches of 5 (cost protection). Store per-ticker sentiment in `comment_tickers`.
 
 **Phase 3.5: Prediction Creation** — Batch Schwab options chain fetch/ticker. Create prediction per comment_ticker: strike delta ~0.30, 14-21 DTE (same logic as Phase 5). If no valid strike or Schwab unavailable: status='expired', append warning.
 
@@ -92,7 +92,7 @@ Returns HTTP 202 with `run_id`, executes 7 phases in background thread (10-30 mi
 
 ## AI Analysis
 
-**Strategy:** Individual (1 comment/call), full context (post image, author trust, parent chain). **Response:** JSON: tickers[], ticker_sentiments[] (flat strings parallel to tickers, e.g. ["bullish","bearish"]), sentiment, sarcasm_detected, has_reasoning, confidence, reasoning_summary. **Mapping:** sarcasm_detected to comments.sarcasm_detected, has_reasoning to comments.has_reasoning, sentiment to comments.sentiment, ticker_sentiments to comment_tickers, confidence to comments.ai_confidence, reasoning_summary to comments.reasoning_summary. **Ticker Rules:** Explicit ($AAPL, AAPL), normalize uppercase, resolve names ("the mouse" to DIS), exclude non-tickers (I, A, CEO, DD, YOLO), include crypto, deduplicate.
+**Strategy:** Individual (1 comment/call), full context (post image, author trust, parent chain, market index context when volatile). API params: temperature=0.3, response_format=json_object, max_tokens=500. Market context gate: if any of SPY/QQQ/IWM moved >=0.8% today, inject today's moves + 5-day trend; prompt guidance distinguishes reactive venting (neutral) from predictive sentiment (bullish/bearish). **Response:** JSON: tickers[], ticker_sentiments[] (flat strings parallel to tickers, e.g. ["bullish","bearish"]), sentiment, sarcasm_detected, has_reasoning, confidence, reasoning_summary. **Mapping:** sarcasm_detected to comments.sarcasm_detected, has_reasoning to comments.has_reasoning, sentiment to comments.sentiment, ticker_sentiments to comment_tickers, confidence to comments.ai_confidence, reasoning_summary to comments.reasoning_summary. **Ticker Rules:** Explicit ($AAPL, AAPL), normalize uppercase, resolve names ("the mouse" to DIS), exclude non-tickers (I, A, CEO, DD, YOLO), include crypto, deduplicate.
 
 ## Author Trust
 

@@ -41,6 +41,16 @@ Sentiment Classification (CRITICAL):
 
 Only assign bullish or bearish if the comment expresses a belief about future direction.
 
+MARKET CONTEXT (when provided):
+On days with significant market moves (>0.8% on major indexes), many comments will be
+reactive — venting about losses, reporting current damage, or expressing frustration.
+These are NOT predictive and should be classified as neutral.
+Only classify as bullish/bearish if the commenter expresses a belief about FUTURE direction,
+not just reacting to what already happened today.
+Examples of reactive (neutral): "this market is trash", "my portfolio is dead today",
+"how did you lose on puts on a day like this"
+Examples of predictive (bearish): "I think there's a bigger dip coming", "SPY to 680 next week"
+
 Your job:
 1. Identify true sarcasm (inverse-meaning only) vs. WSB cultural humor
 2. Extract ticker symbols mentioned (normalize to uppercase)
@@ -112,13 +122,14 @@ def build_user_prompt(
     author: str,
     author_trust: float,
     comment_body: str,
+    market_context: Optional[str] = None,
 ) -> str:
     """
     Build user prompt for GPT-4o-mini sentiment analysis.
 
-    Template injects post title, optional image analysis, parent chain context,
-    author + trust score, and comment body. Includes JSON response structure
-    and validation rules from PRD E.3.
+    Template injects post title, optional market context, optional image analysis,
+    parent chain context, author + trust score, and comment body. Includes JSON
+    response structure and validation rules from PRD E.3.
 
     Args:
         post_title: Title of the post containing this comment
@@ -127,6 +138,7 @@ def build_user_prompt(
         author: Reddit username of comment author
         author_trust: Historical trust score (0.0-1.0)
         comment_body: The comment text to analyze
+        market_context: Pre-formatted market context string (None if flat day or unavailable)
 
     Returns:
         Formatted user prompt string ready for OpenAI API call
@@ -137,6 +149,10 @@ def build_user_prompt(
     prompt_parts = [
         f'Analyze this WSB comment:\n\nPost: "{post_title}"'
     ]
+
+    # Include market context if available (only on volatile days)
+    if market_context:
+        prompt_parts.append(f'\n{market_context}')
 
     # Only include image context if available
     if image_description:

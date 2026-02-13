@@ -228,6 +228,72 @@ class TestFormatParentChain:
         assert 'user2' in result
 
 
+class TestMarketContextInPrompt:
+    """Test market context injection in prompts."""
+
+    def test_system_prompt_includes_market_context_guidance(self):
+        """System prompt includes MARKET CONTEXT guidance section."""
+        from src.prompts import SYSTEM_PROMPT
+
+        assert "MARKET CONTEXT" in SYSTEM_PROMPT
+        assert "0.8%" in SYSTEM_PROMPT
+        assert "reactive" in SYSTEM_PROMPT.lower()
+        assert "predictive" in SYSTEM_PROMPT.lower()
+
+    def test_build_user_prompt_includes_market_context(self):
+        """build_user_prompt includes market context when provided."""
+        from src.prompts import build_user_prompt
+
+        context = "Market context (today): SPY -1.5%, QQQ -2.3%, IWM -0.8%"
+        prompt = build_user_prompt(
+            post_title="Test Post",
+            image_description=None,
+            parent_chain_formatted="",
+            author="testuser",
+            author_trust=0.5,
+            comment_body="This market is trash",
+            market_context=context,
+        )
+
+        assert "SPY -1.5%" in prompt
+        assert "QQQ -2.3%" in prompt
+
+    def test_build_user_prompt_omits_market_context_when_none(self):
+        """build_user_prompt omits market context when None (flat day)."""
+        from src.prompts import build_user_prompt
+
+        prompt = build_user_prompt(
+            post_title="Test Post",
+            image_description=None,
+            parent_chain_formatted="",
+            author="testuser",
+            author_trust=0.5,
+            comment_body="I think SPY goes up",
+            market_context=None,
+        )
+
+        assert "Market context" not in prompt
+
+    def test_market_context_appears_before_comment_body(self):
+        """Market context appears before the comment body in the prompt."""
+        from src.prompts import build_user_prompt
+
+        context = "Market context (today): SPY -1.5%"
+        prompt = build_user_prompt(
+            post_title="Test Post",
+            image_description=None,
+            parent_chain_formatted="",
+            author="testuser",
+            author_trust=0.5,
+            comment_body="Bearish comment here",
+            market_context=context,
+        )
+
+        context_pos = prompt.index("SPY -1.5%")
+        comment_pos = prompt.index("Bearish comment here")
+        assert context_pos < comment_pos
+
+
 class TestJSONResponseStructure:
     """Test expected JSON response structure."""
 
