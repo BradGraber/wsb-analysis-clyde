@@ -519,6 +519,7 @@ plan-ops.py list-skipped       # All skipped tasks with reasons
 plan-ops.py next-task          # Next unblocked pending task (single task)
 plan-ops.py available-tasks    # All unblocked pending tasks, one per story (for batch execution)
 plan-ops.py resume-phase ID    # Session resume detection with routing instructions
+plan-ops.py search "term"      # Full-text search across all plan items (JSON)
 ```
 
 ---

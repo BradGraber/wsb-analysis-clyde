@@ -33,6 +33,7 @@ Usage:
   python3 scripts/plan-ops.py update-task TASK_ID [--title T] [--description D] [--acceptance-criteria AC]
   python3 scripts/plan-ops.py update-story STORY_ID [--title T] [--description D]
   python3 scripts/plan-ops.py update-epic EPIC_ID [--title T] [--description D]
+  python3 scripts/plan-ops.py search PATTERN [--phase PHASE_ID] [--status STATUS] [--type TYPE]
 """
 
 import argparse
@@ -1253,6 +1254,192 @@ def cmd_schema(conn):
     print(json.dumps({'tables': tables}, indent=2))
 
 
+def _search_snippet(text, pattern, context_chars=50):
+    """Extract a snippet around the first match of pattern in text."""
+    if not text:
+        return None
+    idx = text.lower().find(pattern.lower())
+    if idx == -1:
+        return None
+    start = max(0, idx - context_chars)
+    end = min(len(text), idx + len(pattern) + context_chars)
+    snippet = text[start:end]
+    if start > 0:
+        snippet = '...' + snippet
+    if end < len(text):
+        snippet = snippet + '...'
+    return ' '.join(snippet.split())
+
+
+def _get_phases_for(conn, item_type, item_id, epic_id=None):
+    """Return sorted list of phase IDs an item belongs to."""
+    if item_type == 'phase':
+        return [item_id]
+    conditions = []
+    params = []
+    if item_type == 'epic':
+        conditions.append("(pi.item_type = 'epic' AND pi.item_id = ?)")
+        params.append(item_id)
+    elif item_type == 'story':
+        conditions.append("(pi.item_type = 'story' AND pi.item_id = ?)")
+        params.append(item_id)
+        if epic_id:
+            conditions.append("(pi.item_type = 'epic' AND pi.item_id = ?)")
+            params.append(epic_id)
+    if not conditions:
+        return []
+    sql = ('SELECT DISTINCT pi.phase_id FROM phase_items pi WHERE '
+           + ' OR '.join(conditions) + ' ORDER BY pi.phase_id')
+    return [r['phase_id'] for r in conn.execute(sql, params).fetchall()]
+
+
+def cmd_search(conn, pattern, phase_id=None, status=None, type_filter=None):
+    """Search across all plan items for a text pattern (case-insensitive)."""
+    like = f'%{pattern}%'
+    results = []
+
+    # --- Tasks ---
+    if not type_filter or type_filter == 'task':
+        sql = ('SELECT DISTINCT t.id, t.title, t.story_id, t.epic_id, '
+               't.description, t.acceptance_criteria, t.status '
+               'FROM tasks t ')
+        params = []
+        if phase_id:
+            sql += ('JOIN phase_items pi ON '
+                    "(pi.item_type = 'story' AND pi.item_id = t.story_id) "
+                    "OR (pi.item_type = 'epic' AND pi.item_id = t.epic_id) ")
+        sql += 'WHERE (t.title LIKE ? OR t.description LIKE ? OR t.acceptance_criteria LIKE ?) '
+        params.extend([like, like, like])
+        if phase_id:
+            sql += 'AND pi.phase_id = ? '
+            params.append(phase_id)
+        if status:
+            sql += 'AND t.status = ? '
+            params.append(status)
+        sql += 'ORDER BY t.id'
+        for row in conn.execute(sql, params).fetchall():
+            matches = []
+            for field, val in [('title', row['title']),
+                               ('description', row['description']),
+                               ('acceptance_criteria', row['acceptance_criteria'])]:
+                snippet = (val if field == 'title' and val and pattern.lower() in val.lower()
+                           else _search_snippet(val, pattern))
+                if snippet:
+                    matches.append({'field': field, 'snippet': snippet})
+            if matches:
+                results.append({
+                    'id': row['id'], 'type': 'task', 'title': row['title'],
+                    'status': row['status'], 'story_id': row['story_id'],
+                    'epic_id': row['epic_id'],
+                    'phases': _get_phases_for(conn, 'story', row['story_id'], row['epic_id']),
+                    'matches': matches,
+                })
+
+    # --- Stories ---
+    if not type_filter or type_filter == 'story':
+        sql = ('SELECT DISTINCT s.id, s.title, s.epic_id, s.description, s.status '
+               'FROM stories s ')
+        params = []
+        if phase_id:
+            sql += ('JOIN phase_items pi ON '
+                    "(pi.item_type = 'story' AND pi.item_id = s.id) "
+                    "OR (pi.item_type = 'epic' AND pi.item_id = s.epic_id) ")
+        sql += 'WHERE (s.title LIKE ? OR s.description LIKE ?) '
+        params.extend([like, like])
+        if phase_id:
+            sql += 'AND pi.phase_id = ? '
+            params.append(phase_id)
+        if status:
+            sql += 'AND s.status = ? '
+            params.append(status)
+        sql += 'ORDER BY s.id'
+        for row in conn.execute(sql, params).fetchall():
+            matches = []
+            for field, val in [('title', row['title']),
+                               ('description', row['description'])]:
+                snippet = (val if field == 'title' and val and pattern.lower() in val.lower()
+                           else _search_snippet(val, pattern))
+                if snippet:
+                    matches.append({'field': field, 'snippet': snippet})
+            if matches:
+                results.append({
+                    'id': row['id'], 'type': 'story', 'title': row['title'],
+                    'status': row['status'], 'epic_id': row['epic_id'],
+                    'phases': _get_phases_for(conn, 'story', row['id'], row['epic_id']),
+                    'matches': matches,
+                })
+
+    # --- Epics ---
+    if not type_filter or type_filter == 'epic':
+        sql = ('SELECT DISTINCT e.id, e.title, e.description, e.status '
+               'FROM epics e ')
+        params = []
+        if phase_id:
+            sql += ("JOIN phase_items pi ON pi.item_type = 'epic' AND pi.item_id = e.id ")
+        sql += 'WHERE (e.title LIKE ? OR e.description LIKE ?) '
+        params.extend([like, like])
+        if phase_id:
+            sql += 'AND pi.phase_id = ? '
+            params.append(phase_id)
+        if status:
+            sql += 'AND e.status = ? '
+            params.append(status)
+        sql += 'ORDER BY e.id'
+        for row in conn.execute(sql, params).fetchall():
+            matches = []
+            for field, val in [('title', row['title']),
+                               ('description', row['description'])]:
+                snippet = (val if field == 'title' and val and pattern.lower() in val.lower()
+                           else _search_snippet(val, pattern))
+                if snippet:
+                    matches.append({'field': field, 'snippet': snippet})
+            if matches:
+                results.append({
+                    'id': row['id'], 'type': 'epic', 'title': row['title'],
+                    'status': row['status'],
+                    'phases': _get_phases_for(conn, 'epic', row['id']),
+                    'matches': matches,
+                })
+
+    # --- Phases ---
+    if not type_filter or type_filter == 'phase':
+        sql = ('SELECT p.id, p.name, p.goal, p.entry_criteria, p.exit_criteria, p.status '
+               'FROM phases p '
+               'WHERE (p.name LIKE ? OR p.goal LIKE ? '
+               'OR p.entry_criteria LIKE ? OR p.exit_criteria LIKE ?) ')
+        params = [like, like, like, like]
+        if phase_id:
+            sql += 'AND p.id = ? '
+            params.append(phase_id)
+        if status:
+            sql += 'AND p.status = ? '
+            params.append(status)
+        sql += 'ORDER BY p.id'
+        for row in conn.execute(sql, params).fetchall():
+            matches = []
+            for field, val in [('name', row['name']), ('goal', row['goal']),
+                               ('entry_criteria', row['entry_criteria']),
+                               ('exit_criteria', row['exit_criteria'])]:
+                snippet = (val if field == 'name' and val and pattern.lower() in val.lower()
+                           else _search_snippet(val, pattern))
+                if snippet:
+                    matches.append({'field': field, 'snippet': snippet})
+            if matches:
+                results.append({
+                    'id': row['id'], 'type': 'phase', 'title': row['name'],
+                    'status': row['status'],
+                    'phases': [row['id']],
+                    'matches': matches,
+                })
+
+    # Order: epics, stories, tasks, phases
+    type_order = {'epic': 0, 'story': 1, 'task': 2, 'phase': 3}
+    results.sort(key=lambda r: (type_order.get(r['type'], 99), r['id']))
+
+    print(json.dumps({'pattern': pattern, 'match_count': len(results),
+                      'results': results}, indent=2))
+
+
 def cmd_show(conn, item_id):
     """Show all fields for any item by ID (auto-detects type from prefix)."""
     prefix_map = {
@@ -1494,6 +1681,18 @@ if __name__ == '__main__':
     p_uepic.add_argument('--title', help='New epic title')
     p_uepic.add_argument('--description', help='New epic description')
 
+    p_search = sub.add_parser('search',
+                              help='Search plan items for a text pattern (JSON)')
+    p_search.add_argument('pattern', help='Text to search for (case-insensitive)')
+    p_search.add_argument('--phase', help='Filter to items in a specific phase')
+    p_search.add_argument('--status',
+                          choices=['pending', 'in_progress', 'complete', 'skipped',
+                                   'tests_written', 'gate_pending'],
+                          help='Filter by item status')
+    p_search.add_argument('--type',
+                          choices=['task', 'story', 'epic', 'phase'],
+                          help='Filter by entity type')
+
     args = parser.parse_args()
 
     _project_root = args.project_root  # noqa: F841 — used by emit_event()
@@ -1565,5 +1764,8 @@ if __name__ == '__main__':
     elif args.command == 'update-epic':
         cmd_update_epic(conn, args.epic_id, title=args.title,
                         description=args.description)
+    elif args.command == 'search':
+        cmd_search(conn, args.pattern, phase_id=args.phase,
+                   status=args.status, type_filter=args.type)
 
     conn.close()

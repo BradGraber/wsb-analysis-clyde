@@ -85,6 +85,9 @@ python3 scripts/plan-ops.py list-docs
 
 # Increment batch counter and check budget (JSON — returns {batch, budget, stop})
 python3 scripts/plan-ops.py batch-check [--reset] [--budget N]
+
+# Search across all plan items (tasks, stories, epics, phases) — JSON
+python3 scripts/plan-ops.py search "pattern" [--phase PHASE_ID] [--status STATUS] [--type TYPE]
 ```
 
 ## Resume Detection

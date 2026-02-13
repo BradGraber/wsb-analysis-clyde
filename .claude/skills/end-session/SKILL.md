@@ -8,6 +8,15 @@ user_invocable: true
 
 Perform the following steps to cleanly wrap up the current session:
 
+## 0. Check Mode
+
+If `.claude/rules/dev-mode.md` exists, this is a **dev-mode session** (framework development). Adjust the steps below:
+- Step 1: Summarize framework areas changed (hooks, agents, skills, rules, scripts) instead of task completions
+- Step 2: Skip entirely — no plan.db in dev mode
+- Step 3: When reporting uncommitted changes, categorize by framework area:
+  - Hooks (`.claude/hooks/`), Agents (`.claude/agents/`), Skills (`.claude/skills/`), Rules (`.claude/rules/`), Scripts (`scripts/`), Other
+- Steps 4-5: Run normally
+
 ## 1. Session Summary
 Summarize what was accomplished in this session:
 - Decisions made
@@ -38,13 +47,23 @@ Run `git status` to check for uncommitted changes.
   - **If no:** Flag the uncommitted changes in the session report under Open Items so they aren't lost.
 
 ## 4. Update Memory Files
-Update both memory files to reflect the current state:
 
 ### Auto-memory `MEMORY.md`
-- Located in your project's auto-memory directory (referenced in the system prompt)
-- Add any new decisions
-- Update or resolve open questions
-- Keep it concise (under 200 lines)
+
+Update the following sections (see [project-design.md](./project-design.md) "Memory Structure Contract" for the full spec):
+
+**Session History** — Prepend a new entry to `## Session History`. Keep the last 3 entries, drop the oldest if at capacity. Format:
+
+```markdown
+### YYYY-MM-DD
+- **Completed:** [1-3 bullet summary of what was done]
+- **Open:** [uncommitted changes, in-progress tasks, unresolved issues — or "None"]
+- **Next:** [specific suggested action for the next session]
+```
+
+**Current State** — Update `## Current State` to reflect the new project state (latest commits, phase progress, etc.).
+
+**Other sections** — Update TODO, Investigate (dev mode) or Known Issues, Deferred Items (project mode) as needed. Move detailed content to linked topic files if MEMORY.md approaches 200 lines.
 
 ### Auto-memory `project-design.md`
 - Located alongside MEMORY.md in the auto-memory directory
