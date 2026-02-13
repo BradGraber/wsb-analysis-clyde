@@ -92,7 +92,7 @@ Returns HTTP 202 with `run_id`, executes 7 phases in background thread (10-30 mi
 
 ## AI Analysis
 
-**Strategy:** Individual (1 comment/call), full context (post image, author trust, parent chain). **Response:** JSON: tickers[], ticker_sentiments[], sentiment, sarcasm_detected, has_reasoning, confidence, reasoning_summary. **Mapping:** sarcasm_detected to comments.sarcasm_detected, has_reasoning to comments.has_reasoning, sentiment to comments.sentiment, ticker_sentiments to comment_tickers, confidence to comments.ai_confidence, reasoning_summary to comments.reasoning_summary. **Ticker Rules:** Explicit ($AAPL, AAPL), normalize uppercase, resolve names ("the mouse" to DIS), exclude non-tickers (I, A, CEO, DD, YOLO), include crypto, deduplicate.
+**Strategy:** Individual (1 comment/call), full context (post image, author trust, parent chain). **Response:** JSON: tickers[], ticker_sentiments[] (flat strings parallel to tickers, e.g. ["bullish","bearish"]), sentiment, sarcasm_detected, has_reasoning, confidence, reasoning_summary. **Mapping:** sarcasm_detected to comments.sarcasm_detected, has_reasoning to comments.has_reasoning, sentiment to comments.sentiment, ticker_sentiments to comment_tickers, confidence to comments.ai_confidence, reasoning_summary to comments.reasoning_summary. **Ticker Rules:** Explicit ($AAPL, AAPL), normalize uppercase, resolve names ("the mouse" to DIS), exclude non-tickers (I, A, CEO, DD, YOLO), include crypto, deduplicate.
 
 ## Author Trust
 
