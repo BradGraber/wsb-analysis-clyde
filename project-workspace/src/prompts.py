@@ -156,10 +156,7 @@ def build_user_prompt(
 Respond with this exact JSON structure:
 {
   "tickers": ["TICKER1", "TICKER2"],
-  "ticker_sentiments": [
-    {"ticker": "TICKER1", "sentiment": "bullish|bearish|neutral"},
-    {"ticker": "TICKER2", "sentiment": "bullish|bearish|neutral"}
-  ],
+  "ticker_sentiments": ["bullish|bearish|neutral", "bullish|bearish|neutral"],
   "sentiment": "bullish|bearish|neutral",
   "sarcasm_detected": true|false,
   "has_reasoning": true|false,
@@ -168,8 +165,8 @@ Respond with this exact JSON structure:
 }
 
 Rules:
-- ticker_sentiments must have one entry per ticker in tickers array
-- sentiment is the overall comment direction (for single-ticker, matches ticker_sentiments[0].sentiment)
+- ticker_sentiments is a flat array of sentiment strings, parallel to tickers (one per ticker)
+- sentiment is the overall comment direction (for single-ticker, matches ticker_sentiments[0])
 - reasoning_summary is null if has_reasoning is false""")
 
     return "\n".join(prompt_parts)

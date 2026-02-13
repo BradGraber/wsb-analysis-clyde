@@ -138,6 +138,14 @@ def parse_ai_response(raw_content: str) -> Dict[str, Any]:
         structlog.get_logger().warning("Missing required fields in AI response", missing=missing_fields)
         raise ValueError(f"Missing required fields: {missing_fields}")
 
+    # Normalize boolean fields — AI may return dicts or other types
+    data['sarcasm_detected'] = bool(data['sarcasm_detected'])
+    data['has_reasoning'] = bool(data['has_reasoning'])
+
+    # Normalize reasoning_summary — AI may return dict/list instead of string
+    if data['reasoning_summary'] is not None and not isinstance(data['reasoning_summary'], str):
+        data['reasoning_summary'] = json.dumps(data['reasoning_summary'])
+
     # Validate and normalize sentiment
     valid_sentiments = {'bullish', 'bearish', 'neutral'}
     sentiment = data['sentiment']
@@ -190,6 +198,13 @@ def parse_ai_response(raw_content: str) -> Dict[str, Any]:
 
     if not isinstance(ticker_sentiments, list):
         raise ValueError(f"ticker_sentiments must be a list, got {type(ticker_sentiments).__name__}")
+
+    # Normalize ticker_sentiments elements — AI may return dicts or strings
+    data['ticker_sentiments'] = [
+        ts.get('sentiment', 'neutral') if isinstance(ts, dict) else str(ts)
+        for ts in ticker_sentiments
+    ]
+    ticker_sentiments = data['ticker_sentiments']
 
     if len(tickers) != len(ticker_sentiments):
         structlog.get_logger().warning(
