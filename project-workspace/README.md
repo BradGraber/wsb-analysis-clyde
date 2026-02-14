@@ -116,6 +116,28 @@ Errors return: `{ "error": { "code", "message" } }`.
 
 **Status response fields:** `status`, `current_phase`, `phase_label`, `progress_current`, `progress_total`, `results`, `warnings`
 
+### Tuning Workbench
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/tuning/comments` | Browse/search comments with filters |
+| GET | `/api/tuning/comments/{reddit_id}` | Full comment detail with post context |
+| GET | `/api/tuning/configs` | List all prompt configs |
+| POST | `/api/tuning/configs` | Create a new prompt config |
+| GET | `/api/tuning/configs/{id}` | Get a single prompt config |
+| POST | `/api/tuning/dry-run` | Preview prompts without calling the API |
+| POST | `/api/tuning/analyze` | Run a single analysis and save the tuning run |
+| POST | `/api/tuning/multi-run` | Run N analyses with SSE streaming |
+| POST | `/api/tuning/compare` | Compare multiple configs on the same comment via SSE |
+| GET | `/api/tuning/history` | Browse tuning run history with filters |
+| GET | `/api/tuning/market-context` | Get current market context data |
+
+**Filters on `/api/tuning/comments`:** `q` (text search), `sentiment`, `limit`, `offset`
+
+**Filters on `/api/tuning/history`:** `reddit_id`, `config_id`, `tag`, `limit`, `offset`
+
+**Web UI:** `http://localhost:8000/tuning` -- Browse comments, run experiments, compare configs, view history.
+
 ### Prices & System
 
 | Method | Path | Description |
@@ -167,6 +189,25 @@ curl http://localhost:8000/portfolios/1
 
 # Position detail with exit history
 curl http://localhost:8000/positions/1
+
+# Tuning workbench — browse comments
+curl "http://localhost:8000/api/tuning/comments?limit=5"
+
+# Tuning workbench — list prompt configs
+curl http://localhost:8000/api/tuning/configs
+
+# Tuning workbench — dry run (preview prompts, no API cost)
+curl -X POST http://localhost:8000/api/tuning/dry-run \
+  -H "Content-Type: application/json" \
+  -d '{"reddit_id": "abc123"}'
+
+# Tuning workbench — run analysis
+curl -X POST http://localhost:8000/api/tuning/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"reddit_id": "abc123", "market_context": false}'
+
+# Tuning workbench — browse history
+curl "http://localhost:8000/api/tuning/history?limit=10"
 ```
 
 ## Data Pipeline
@@ -198,6 +239,8 @@ project-workspace/
     ai_parser.py           # Parse AI JSON responses, normalize tickers
     ai_batch.py            # Concurrent batch processing with retry
     prompts.py             # WSB-tuned sentiment analysis prompt templates
+    market_context.py      # SPY/QQQ/IWM market data via yfinance
+    tuning.py              # Tuning workbench service (config CRUD, run persistence)
     models/
       reddit_models.py     # ProcessedPost, ProcessedComment, ParentChainEntry
     api/
@@ -211,9 +254,10 @@ project-workspace/
         runs.py            # /runs endpoints
         system.py          # /prices and /status endpoints
         auth.py            # /auth/schwab OAuth endpoints
+        tuning.py          # /api/tuning endpoints (workbench API)
     backend/
       db/
-        schema.sql         # 16 table definitions
+        schema.sql         # 18 table definitions
         seed.sql           # System config (34 keys) and 4 portfolios
         connection.py      # get_connection() context manager (WAL + FK)
       integrations/
@@ -225,7 +269,8 @@ project-workspace/
       utils/
         errors.py          # retry_with_backoff(), WarningsCollector
         logging_config.py  # Structlog JSON logging setup
-  tests/                   # 404 behavioral tests
+  static/tuning/           # Tuning workbench web UI (vanilla JS)
+  tests/                   # 461 behavioral tests
 ```
 
 ## Scripts
@@ -236,6 +281,32 @@ Populates the database with realistic mock data across all tables. Idempotent --
 
 ```bash
 python scripts/seed_data.py
+```
+
+### `scripts/migrate_prompt_configs.py` -- Migrate DB for Tuning Workbench
+
+Adds the `prompt_configs` and `tuning_runs` tables to an existing database and seeds the default prompt config. Safe to run multiple times (idempotent).
+
+```bash
+python scripts/migrate_prompt_configs.py [--db-path ./data/wsb.db]
+```
+
+### `scripts/tune_prompt.py` -- CLI Prompt Tuning
+
+Experiment with different prompt configurations on individual comments from the command line. See `docs/pipeline.md` for full usage.
+
+```bash
+# Preview the prompt (no API cost)
+python scripts/tune_prompt.py REDDIT_ID --dry-run
+
+# Analyze with overrides
+python scripts/tune_prompt.py REDDIT_ID --temperature 0.7 --no-market-context
+
+# Run N times for consistency check
+python scripts/tune_prompt.py REDDIT_ID --runs 5
+
+# Compare configs side-by-side
+python scripts/tune_prompt.py REDDIT_ID --compare "temp=0.3" "temp=0.7,no-market-context"
 ```
 
 ### Schwab OAuth Setup

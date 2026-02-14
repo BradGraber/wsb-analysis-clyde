@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WSB Tuning Workbench</title>
+    <link rel="stylesheet" href="/static/tuning/style.css">
+</head>
+<body>
+    <header>
+        <h1>WSB Tuning Workbench</h1>
+        <nav id="tabs">
+            <button class="tab active" data-tab="browse">Browse</button>
+            <button class="tab" data-tab="analyze">Analyze</button>
+            <button class="tab" data-tab="compare">Compare</button>
+            <button class="tab" data-tab="history">History</button>
+        </nav>
+    </header>
+
+    <main>
+        <!-- Browse Tab -->
+        <section id="tab-browse" class="tab-content active">
+            <div class="controls">
+                <input type="text" id="browse-search" placeholder="Search comments..." />
+                <select id="browse-sentiment">
+                    <option value="">All sentiments</option>
+                    <option value="bullish">Bullish</option>
+                    <option value="bearish">Bearish</option>
+                    <option value="neutral">Neutral</option>
+                </select>
+                <button id="browse-btn" class="btn">Search</button>
+            </div>
+            <div id="browse-results"></div>
+            <div id="browse-pagination" class="pagination"></div>
+        </section>
+
+        <!-- Analyze Tab -->
+        <section id="tab-analyze" class="tab-content">
+            <div id="selected-comment" class="comment-card empty">
+                <p class="placeholder">Select a comment from the Browse tab</p>
+            </div>
+            <div class="controls">
+                <select id="analyze-config"></select>
+                <select id="analyze-market-ctx">
+                    <option value="auto">Market context: auto</option>
+                    <option value="off">Market context: off</option>
+                </select>
+                <input type="text" id="analyze-tag" placeholder="Tag (optional)" />
+            </div>
+            <div class="controls">
+                <button id="btn-dry-run" class="btn">Dry Run</button>
+                <button id="btn-analyze" class="btn primary">Analyze</button>
+                <button id="btn-multi-run" class="btn">Multi-Run</button>
+                <label>Runs: <input type="number" id="multi-run-count" value="5" min="2" max="20" style="width:50px" /></label>
+            </div>
+            <div id="analyze-output"></div>
+        </section>
+
+        <!-- Compare Tab -->
+        <section id="tab-compare" class="tab-content">
+            <div id="compare-comment" class="comment-card empty">
+                <p class="placeholder">Select a comment from the Browse tab</p>
+            </div>
+            <div class="controls">
+                <div id="compare-config-list"></div>
+                <button id="btn-add-config" class="btn small">+ Add Config</button>
+                <select id="compare-market-ctx">
+                    <option value="auto">Market context: auto</option>
+                    <option value="off">Market context: off</option>
+                </select>
+                <button id="btn-compare" class="btn primary">Compare</button>
+            </div>
+            <div id="compare-output"></div>
+        </section>
+
+        <!-- History Tab -->
+        <section id="tab-history" class="tab-content">
+            <div class="controls">
+                <input type="text" id="history-reddit-id" placeholder="Filter by reddit_id" />
+                <input type="text" id="history-tag" placeholder="Filter by tag" />
+                <select id="history-config"></select>
+                <button id="history-btn" class="btn">Search</button>
+            </div>
+            <div id="history-results"></div>
+            <div id="history-pagination" class="pagination"></div>
+        </section>
+    </main>
+
+    <script src="/static/tuning/app.js"></script>
+</body>
+</html>

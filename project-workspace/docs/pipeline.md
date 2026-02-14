@@ -283,6 +283,61 @@ The analyze script shows an estimate before proceeding and asks for confirmation
 - Use `--top-n 10` on score to reduce the comment count before analysis
 - Re-run analyze on the same data: deduplication skips already-analyzed comments
 
+## Prompt Tuning Workbench
+
+Two interfaces for experimenting with prompt configurations on individual comments without modifying production code. Useful for understanding how temperature, market context, and prompt wording affect analysis results.
+
+### Web UI
+
+Start the API server and visit `http://localhost:8000/tuning`. Four tabs:
+
+- **Browse** -- Search and filter comments from the database. Click a row to select it for analysis.
+- **Analyze** -- Run a single analysis, multi-run consistency test, or dry run (prompt preview, no API cost) on the selected comment. Choose a prompt config and market context setting.
+- **Compare** -- Run the same comment through 2-5 different prompt configs side-by-side via SSE streaming.
+- **History** -- Browse all tuning runs with filters by comment, config, or tag.
+
+### CLI
+
+`scripts/tune_prompt.py` provides the same capabilities from the command line:
+
+```bash
+# See the exact prompt that would be sent (no API cost)
+python scripts/tune_prompt.py REDDIT_ID --dry-run
+
+# Analyze with current defaults
+python scripts/tune_prompt.py REDDIT_ID
+
+# Override temperature or disable market context
+python scripts/tune_prompt.py REDDIT_ID --temperature 0.7
+python scripts/tune_prompt.py REDDIT_ID --no-market-context
+
+# Run N times to test consistency at a given temperature
+python scripts/tune_prompt.py REDDIT_ID --runs 5
+
+# Compare two configs side-by-side on the same comment
+python scripts/tune_prompt.py REDDIT_ID --compare "temp=0.3" "temp=0.3,no-market-context"
+
+# Use a custom system prompt from a file
+python scripts/tune_prompt.py REDDIT_ID --system-prompt my_prompt.txt
+
+# Find interesting test cases by listing sentiment flips between two DBs
+python scripts/tune_prompt.py --list-flips --db data/wsb_pre_update.db --db2 data/wsb.db
+```
+
+Config strings for `--compare` use comma-separated key=value pairs: `temp=0.7`, `no-market-context`, `max-tokens=800`, `model=gpt-4o`, `system-prompt=file.txt`.
+
+### Prompt Configs
+
+Prompt configs are stored in the `prompt_configs` table and track all parameters sent to the AI provider (system prompt, model, temperature, top_p, max_tokens, penalties, response format). The production pipeline records which config was used for each comment via `comments.prompt_config_id`.
+
+Create configs via the API (`POST /api/tuning/configs`) or the web UI. A default config is seeded by the migration script (`scripts/migrate_prompt_configs.py`).
+
+### Tuning Runs
+
+Every analysis through the workbench (unless `no_log` is set) is saved to the `tuning_runs` table with the full result, token usage, cost, and the user prompt that was sent. Runs are tagged with a mode (`single`, `multi`, `compare`) and optional user-defined tag for organizing experiments.
+
+Results are logged to `data/tuning-results.jsonl` by the CLI and to the database by the web UI. Experiment notes go in `docs/tuning-log.md`.
+
 ## Troubleshooting
 
 ### Missing environment variables

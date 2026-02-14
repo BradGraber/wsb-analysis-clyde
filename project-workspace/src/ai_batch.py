@@ -203,7 +203,8 @@ async def process_comment_with_retry(
 def store_analysis_results(
     conn: sqlite3.Connection,
     run_id: int,
-    analysis_results: List[Dict[str, Any]]
+    analysis_results: List[Dict[str, Any]],
+    prompt_config_id: Optional[int] = None,
 ) -> None:
     """Persist AI analysis results for a batch of comments.
 
@@ -272,6 +273,9 @@ def store_analysis_results(
         )
         existing = existing_cursor.fetchone()
 
+        # Resolve prompt_config_id: per-result overrides batch-level
+        effective_config_id = result.get('prompt_config_id', prompt_config_id)
+
         if existing:
             # UPDATE path: preserve existing author_trust_score (dedup)
             # Only update AI annotations, not the trust score
@@ -282,6 +286,7 @@ def store_analysis_results(
                     has_reasoning = ?,
                     reasoning_summary = ?,
                     ai_confidence = ?,
+                    prompt_config_id = ?,
                     analyzed_at = datetime('now')
                 WHERE reddit_id = ?
             """, (
@@ -290,6 +295,7 @@ def store_analysis_results(
                 result.get('has_reasoning', False),
                 reasoning_summary,
                 result.get('ai_confidence'),
+                effective_config_id,
                 reddit_id
             ))
 
@@ -307,9 +313,9 @@ def store_analysis_results(
                     analysis_run_id, post_id, reddit_id, author, body, created_utc,
                     score, depth, prioritization_score, sentiment, sarcasm_detected,
                     has_reasoning, reasoning_summary, ai_confidence, author_trust_score,
-                    analyzed_at
+                    prompt_config_id, analyzed_at
                 )
-                VALUES (?, ?, ?, ?, ?, datetime(?, 'unixepoch'), ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                VALUES (?, ?, ?, ?, ?, datetime(?, 'unixepoch'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
             """, (
                 run_id,
                 post_db_id,
@@ -325,7 +331,8 @@ def store_analysis_results(
                 result.get('has_reasoning', False),
                 reasoning_summary,
                 result.get('ai_confidence'),
-                author_trust_score  # Phase 2 snapshot, NOT a new lookup
+                author_trust_score,  # Phase 2 snapshot, NOT a new lookup
+                effective_config_id,
             ))
 
             logger.debug(
@@ -454,7 +461,8 @@ def store_comment_tickers(
 def commit_analysis_batch(
     db_conn: sqlite3.Connection,
     run_id: int,
-    batch_results: List[Dict[str, Any]]
+    batch_results: List[Dict[str, Any]],
+    prompt_config_id: Optional[int] = None,
 ) -> None:
     """Commit a batch of analyzed comments in a single SQLite transaction.
 
@@ -497,7 +505,7 @@ def commit_analysis_batch(
     try:
         # Store all comment records with AI annotations
         # SQLite starts an implicit transaction on the first write
-        store_analysis_results(db_conn, run_id, batch_results)
+        store_analysis_results(db_conn, run_id, batch_results, prompt_config_id)
 
         # Store comment_tickers junction records for each comment
         for result in batch_results:
@@ -547,7 +555,8 @@ async def process_comments_in_batches(
     run_id: int,
     db_conn: Optional[sqlite3.Connection] = None,
     openai_client: Optional[Any] = None,
-    market_context: Optional[str] = None
+    market_context: Optional[str] = None,
+    prompt_config_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Main orchestrator for concurrent AI batch processing.
 

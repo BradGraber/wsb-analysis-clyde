@@ -188,9 +188,11 @@ CREATE TABLE IF NOT EXISTS comments (
     author_trust_score FLOAT,
     analyzed_at TIMESTAMP,
     parent_chain TEXT,
+    prompt_config_id INT,
     FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs(id),
     FOREIGN KEY (post_id) REFERENCES reddit_posts(id) ON DELETE RESTRICT,
-    FOREIGN KEY (parent_comment_id) REFERENCES comments(id)
+    FOREIGN KEY (parent_comment_id) REFERENCES comments(id),
+    FOREIGN KEY (prompt_config_id) REFERENCES prompt_configs(id)
 );
 
 -- =============================================================================
@@ -315,4 +317,61 @@ CREATE TABLE IF NOT EXISTS prediction_exits (
     simulated_pnl FLOAT,
     created_at TIMESTAMP,
     FOREIGN KEY (prediction_id) REFERENCES predictions(id)
+);
+
+-- =============================================================================
+-- Prompt Configs Table
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS prompt_configs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name VARCHAR(100) NOT NULL,
+    system_prompt TEXT NOT NULL,
+    -- Provider + model (cross-provider ready)
+    provider VARCHAR(20) NOT NULL DEFAULT 'openai',
+    api_base_url VARCHAR(500),
+    model VARCHAR(50) NOT NULL DEFAULT 'gpt-4o-mini',
+    -- Universal tuning params
+    temperature REAL NOT NULL DEFAULT 0.3,
+    top_p REAL NOT NULL DEFAULT 1.0,
+    max_tokens INT NOT NULL DEFAULT 500,
+    -- Provider-specific params (nullable)
+    top_k INT,
+    frequency_penalty REAL,
+    presence_penalty REAL,
+    response_format VARCHAR(20),
+    -- Management
+    is_default BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Fine-tuning provenance (nullable)
+    is_fine_tuned BOOLEAN NOT NULL DEFAULT FALSE,
+    base_model VARCHAR(50),
+    fine_tune_job_id VARCHAR(100),
+    fine_tune_suffix VARCHAR(100),
+    created_at TIMESTAMP DEFAULT (datetime('now'))
+);
+
+-- =============================================================================
+-- Tuning Runs Table
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS tuning_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    comment_id INT NOT NULL,
+    prompt_config_id INT NOT NULL,
+    market_context_used TEXT,
+    user_prompt TEXT,
+    sentiment VARCHAR(10),
+    ai_confidence FLOAT,
+    sarcasm_detected BOOLEAN,
+    has_reasoning BOOLEAN,
+    reasoning_summary TEXT,
+    tickers TEXT,
+    ticker_sentiments TEXT,
+    prompt_tokens INT,
+    completion_tokens INT,
+    cost REAL,
+    mode VARCHAR(20),
+    label VARCHAR(20),
+    tag VARCHAR(100),
+    created_at TIMESTAMP DEFAULT (datetime('now')),
+    FOREIGN KEY (comment_id) REFERENCES comments(id),
+    FOREIGN KEY (prompt_config_id) REFERENCES prompt_configs(id)
 );

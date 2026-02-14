@@ -37,6 +37,8 @@ _load_dotenv()
 from src.ai_dedup import partition_for_analysis
 from src.ai_batch import process_comments_in_batches, commit_analysis_batch
 from src.market_context import fetch_market_context, format_market_context, should_include_context
+from src.tuning import get_or_create_prompt_config, get_default_prompt_config
+from src.prompts import SYSTEM_PROMPT
 
 
 # GPT-4o-mini pricing (per 1M tokens)
@@ -102,6 +104,21 @@ async def run_analysis(input_path: str, db_path: str, skip_confirm: bool):
             conn.close()
             return
 
+    # Look up or create the default prompt config for tracking
+    prompt_config_id = None
+    try:
+        default_config = get_default_prompt_config(conn)
+        if default_config:
+            prompt_config_id = default_config["id"]
+        else:
+            prompt_config_id = get_or_create_prompt_config(
+                conn, name="default", system_prompt=SYSTEM_PROMPT,
+                response_format="json_object", is_default=True,
+            )
+        print(f"  Prompt config: #{prompt_config_id}")
+    except Exception as e:
+        print(f"  Warning: Could not resolve prompt config ({e}) — continuing without tracking")
+
     # Fetch market context for reactive/predictive differentiation
     market_context_str = None
     print("\nFetching market index data...")
@@ -166,7 +183,7 @@ async def run_analysis(input_path: str, db_path: str, skip_confirm: bool):
         batch_size = 5
         for i in range(0, len(merged_results), batch_size):
             batch = merged_results[i:i + batch_size]
-            commit_analysis_batch(conn, run_id, batch)
+            commit_analysis_batch(conn, run_id, batch, prompt_config_id)
 
     # Update analysis run status
     conn.execute(

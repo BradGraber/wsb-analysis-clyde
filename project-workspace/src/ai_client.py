@@ -8,7 +8,7 @@ Part of Phase 3: AI Analysis Pipeline
 """
 
 import os
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
 import structlog
 import openai
@@ -251,18 +251,32 @@ class OpenAIClient:
     async def send_chat_completion(
         self,
         system_prompt: str,
-        user_prompt: str
+        user_prompt: str,
+        model: str = "gpt-4o-mini",
+        temperature: float = 0.3,
+        top_p: float = 1.0,
+        max_tokens: int = 500,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        response_format: Optional[str] = "json_object",
     ) -> Dict[str, Any]:
-        """Send chat completion request to OpenAI gpt-4o-mini model.
+        """Send chat completion request to OpenAI model.
 
-        Sends a chat completion request with system and user prompts to the
-        gpt-4o-mini model. Returns the raw response content string and token
-        usage counts for downstream cost tracking. Tracks monthly token usage
-        and logs warning if cost exceeds $60 threshold.
+        Sends a chat completion request with system and user prompts.
+        Returns the raw response content string and token usage counts
+        for downstream cost tracking. Tracks monthly token usage and
+        logs warning if cost exceeds $60 threshold.
 
         Args:
             system_prompt: System message defining assistant behavior
             user_prompt: User message with the actual request/question
+            model: Model name (default: gpt-4o-mini)
+            temperature: Sampling temperature (default: 0.3)
+            top_p: Top-p sampling (default: 1.0)
+            max_tokens: Max completion tokens (default: 500)
+            frequency_penalty: Frequency penalty (None to omit)
+            presence_penalty: Presence penalty (None to omit)
+            response_format: Response format type (default: json_object, None to omit)
 
         Returns:
             Dictionary with:
@@ -273,28 +287,26 @@ class OpenAIClient:
             APIConnectionError: Network/connection failures
             InternalServerError: 5xx server errors from OpenAI
             APIError: Other API errors (authentication, rate limits, etc.)
-
-        Example:
-            >>> result = await client.send_chat_completion(
-            ...     system_prompt="You are a sentiment analyzer.",
-            ...     user_prompt="Analyze: 'I love this product!'"
-            ... )
-            >>> print(result['content'])
-            '{"sentiment": "positive", "confidence": 0.95}'
-            >>> print(result['usage']['prompt_tokens'])
-            25
         """
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
+            create_kwargs: Dict[str, Any] = {
+                "model": model,
+                "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.3,
-                max_tokens=500,
-                response_format={"type": "json_object"},
-            )
+                "temperature": temperature,
+                "top_p": top_p,
+                "max_tokens": max_tokens,
+            }
+            if frequency_penalty is not None:
+                create_kwargs["frequency_penalty"] = frequency_penalty
+            if presence_penalty is not None:
+                create_kwargs["presence_penalty"] = presence_penalty
+            if response_format:
+                create_kwargs["response_format"] = {"type": response_format}
+
+            response = self.client.chat.completions.create(**create_kwargs)
 
             # Extract content and token usage
             content = response.choices[0].message.content

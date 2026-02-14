@@ -119,7 +119,9 @@ def expected_tables():
         'position_exits',
         'predictions',
         'prediction_outcomes',
-        'prediction_exits'
+        'prediction_exits',
+        'prompt_configs',
+        'tuning_runs',
     ]
 
 

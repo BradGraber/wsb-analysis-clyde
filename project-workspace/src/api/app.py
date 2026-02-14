@@ -28,14 +28,15 @@ import traceback
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.api.models import ErrorEnvelope, ErrorDetail
 from src.api.responses import (
     VALIDATION_ERROR, DATABASE_ERROR, NOT_FOUND,
     ERROR_STATUS_CODES,
 )
-from src.api.routes import signals, positions, portfolios, runs, system, auth
+from src.api.routes import signals, positions, portfolios, runs, system, auth, tuning
 from src.backend.db.connection import get_connection
 from src.backend.utils.logging_config import get_logger, setup_logging
 
@@ -116,6 +117,22 @@ app.include_router(portfolios.evaluation_router)
 app.include_router(runs.router)
 app.include_router(system.router)
 app.include_router(auth.router)
+app.include_router(tuning.router)
+
+
+# Static files for tuning workbench UI
+_static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "static")
+if os.path.isdir(_static_dir):
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
+
+@app.get("/tuning", include_in_schema=False)
+async def tuning_page():
+    """Serve the tuning workbench UI."""
+    index_path = os.path.join(_static_dir, "tuning", "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return JSONResponse(status_code=404, content={"error": "Tuning UI not found"})
 
 # Exception Handlers
 # These handlers convert exceptions to the standard ErrorEnvelope format
