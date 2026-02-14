@@ -1,8 +1,16 @@
 /* WSB Tuning Workbench — Frontend Application */
 
 const API = '/api/tuning';
-let selectedComment = null;
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
 let configs = [];
+let selectedIds = new Set();           // multi-select for workbench
+let selectedComments = new Map();      // reddit_id -> full comment data
+let matrixResults = {};                // { "reddit_id|config_id": { result, usage, cost, run_id } }
+let matrixColumns = [];                // ordered config ids that have been run
 
 // ---------------------------------------------------------------------------
 // Utilities
@@ -41,6 +49,91 @@ function escapeHtml(str) {
     return d.innerHTML;
 }
 
+/** Parse SSE stream from a fetch Response, yielding JSON objects. */
+async function* parseSSE(response) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            let json;
+            try { json = JSON.parse(line.slice(6)); }
+            catch { continue; }
+            yield json;
+        }
+    }
+}
+
+function renderPagination(containerId, total, offset, limit, callback) {
+    const el = document.getElementById(containerId);
+    const page = Math.floor(offset / limit) + 1;
+    const totalPages = Math.ceil(total / limit);
+
+    el.innerHTML = `
+        <button ${offset <= 0 ? 'disabled' : ''} id="${containerId}-prev">Prev</button>
+        <span class="page-info">Page ${page} of ${totalPages} (${total} total)</span>
+        <button ${offset + limit >= total ? 'disabled' : ''} id="${containerId}-next">Next</button>
+    `;
+
+    document.getElementById(`${containerId}-prev`)?.addEventListener('click', () => {
+        callback(Math.max(0, offset - limit));
+    });
+    document.getElementById(`${containerId}-next`)?.addEventListener('click', () => {
+        callback(offset + limit);
+    });
+}
+
+function renderResultFields(r, usage, cost) {
+    const tickers = (r.tickers || []).map((t, i) =>
+        `${t}(${(r.ticker_sentiments || [])[i] || '?'})`
+    ).join(', ') || 'none';
+
+    return `
+        <div class="matrix-detail-grid">
+            <div class="detail-field">
+                <span class="label">Sentiment</span>
+                <span class="value">${sentimentBadge(r.sentiment)}</span>
+            </div>
+            <div class="detail-field">
+                <span class="label">Confidence</span>
+                <span class="value">${r.confidence?.toFixed(2) || '--'}</span>
+            </div>
+            <div class="detail-field">
+                <span class="label">Tickers</span>
+                <span class="value">${escapeHtml(tickers)}</span>
+            </div>
+            <div class="detail-field">
+                <span class="label">Sarcasm</span>
+                <span class="value">${r.sarcasm_detected ? 'yes' : 'no'}</span>
+            </div>
+            <div class="detail-field">
+                <span class="label">Reasoning</span>
+                <span class="value">${r.has_reasoning ? 'yes' : 'no'}</span>
+            </div>
+            <div class="detail-field">
+                <span class="label">Cost</span>
+                <span class="value cost">${formatCost(cost)}</span>
+            </div>
+            <div class="detail-field">
+                <span class="label">Tokens</span>
+                <span class="value token-count">${usage.prompt_tokens} / ${usage.completion_tokens}</span>
+            </div>
+        </div>
+        ${r.reasoning_summary ? `<div class="matrix-detail-reasoning">
+            <strong>Reasoning:</strong> ${escapeHtml(r.reasoning_summary)}
+        </div>` : ''}
+    `;
+}
+
 // ---------------------------------------------------------------------------
 // Tab Navigation
 // ---------------------------------------------------------------------------
@@ -51,6 +144,8 @@ document.querySelectorAll('.tab').forEach(tab => {
         document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
         tab.classList.add('active');
         document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
+        // Load data for tabs that need it
+        if (tab.dataset.tab === 'configs') loadConfigList();
     });
 });
 
@@ -69,37 +164,31 @@ async function loadConfigs() {
 }
 
 function populateConfigDropdowns() {
-    const selects = [
-        document.getElementById('analyze-config'),
-        document.getElementById('history-config'),
-    ];
-
-    selects.forEach(sel => {
-        if (!sel) return;
-        sel.innerHTML = '<option value="">All configs</option>';
+    // History config dropdown (has "All" option)
+    const historyConfig = document.getElementById('history-config');
+    if (historyConfig) {
+        historyConfig.innerHTML = '<option value="">All configs</option>';
         configs.forEach(c => {
             const opt = document.createElement('option');
             opt.value = c.id;
             opt.textContent = `${c.name} (${c.model}, t=${c.temperature})`;
             if (c.is_default) opt.textContent += ' *';
-            sel.appendChild(opt);
+            historyConfig.appendChild(opt);
         });
-    });
+    }
 
-    // Analyze config: select default
-    const analyzeConfig = document.getElementById('analyze-config');
-    if (analyzeConfig) {
-        analyzeConfig.innerHTML = '';
+    // Workbench config dropdown (select default)
+    const wbConfig = document.getElementById('wb-config');
+    if (wbConfig) {
+        wbConfig.innerHTML = '';
         configs.forEach(c => {
             const opt = document.createElement('option');
             opt.value = c.id;
             opt.textContent = `${c.name} (${c.model}, t=${c.temperature})`;
             if (c.is_default) { opt.textContent += ' *'; opt.selected = true; }
-            analyzeConfig.appendChild(opt);
+            wbConfig.appendChild(opt);
         });
     }
-
-    updateCompareConfigList();
 }
 
 // ---------------------------------------------------------------------------
@@ -123,26 +212,28 @@ async function browseComments(offset = 0) {
         renderBrowseResults(data.data, data.meta.total);
     } catch (e) {
         document.getElementById('browse-results').innerHTML =
-            `<p style="color:var(--bearish)">Error: ${escapeHtml(e.message)}</p>`;
+            `<p class="error-text">Error: ${escapeHtml(e.message)}</p>`;
     }
 }
 
 function renderBrowseResults(items, total) {
     const container = document.getElementById('browse-results');
     if (!items.length) {
-        container.innerHTML = '<p style="color:var(--text-muted)">No comments found.</p>';
+        container.innerHTML = '<p class="muted-text">No comments found.</p>';
         document.getElementById('browse-pagination').innerHTML = '';
         return;
     }
 
     let html = `<table><thead><tr>
+        <th class="col-check"><input type="checkbox" id="browse-check-all" /></th>
         <th>ID</th><th>Author</th><th>Body</th>
         <th>Sentiment</th><th>Conf</th><th>Score</th>
     </tr></thead><tbody>`;
 
     items.forEach(c => {
-        const sel = selectedComment?.reddit_id === c.reddit_id ? ' selected' : '';
-        html += `<tr class="browse-row${sel}" data-id="${escapeHtml(c.reddit_id)}">
+        const checked = selectedIds.has(c.reddit_id) ? ' checked' : '';
+        html += `<tr class="browse-row${checked ? ' selected' : ''}" data-id="${escapeHtml(c.reddit_id)}">
+            <td class="col-check"><input type="checkbox" class="browse-check" data-id="${escapeHtml(c.reddit_id)}"${checked} /></td>
             <td>${escapeHtml(c.reddit_id)}</td>
             <td>${escapeHtml(c.author)}</td>
             <td>${escapeHtml(truncate(c.body, 60))}</td>
@@ -155,75 +246,91 @@ function renderBrowseResults(items, total) {
     html += '</tbody></table>';
     container.innerHTML = html;
 
-    // Click handlers
-    container.querySelectorAll('.browse-row').forEach(row => {
-        row.addEventListener('click', () => selectComment(row.dataset.id));
+    // Checkbox handlers
+    container.querySelectorAll('.browse-check').forEach(cb => {
+        cb.addEventListener('change', (e) => {
+            e.stopPropagation();
+            const id = cb.dataset.id;
+            if (cb.checked) {
+                selectedIds.add(id);
+                cb.closest('tr').classList.add('selected');
+                // Load full comment data
+                loadCommentForWorkbench(id);
+            } else {
+                selectedIds.delete(id);
+                selectedComments.delete(id);
+                cb.closest('tr').classList.remove('selected');
+            }
+            updateSelectionUI();
+        });
     });
 
-    // Pagination
+    // Check-all header
+    const checkAll = document.getElementById('browse-check-all');
+    if (checkAll) {
+        checkAll.checked = items.length > 0 && items.every(c => selectedIds.has(c.reddit_id));
+        checkAll.addEventListener('change', () => {
+            const checks = container.querySelectorAll('.browse-check');
+            checks.forEach(cb => {
+                cb.checked = checkAll.checked;
+                const id = cb.dataset.id;
+                if (checkAll.checked) {
+                    selectedIds.add(id);
+                    cb.closest('tr').classList.add('selected');
+                    loadCommentForWorkbench(id);
+                } else {
+                    selectedIds.delete(id);
+                    selectedComments.delete(id);
+                    cb.closest('tr').classList.remove('selected');
+                }
+            });
+            updateSelectionUI();
+        });
+    }
+
     renderPagination('browse-pagination', total, browseOffset, BROWSE_LIMIT, browseComments);
 }
 
-function renderPagination(containerId, total, offset, limit, callback) {
-    const el = document.getElementById(containerId);
-    const page = Math.floor(offset / limit) + 1;
-    const totalPages = Math.ceil(total / limit);
-
-    el.innerHTML = `
-        <button ${offset <= 0 ? 'disabled' : ''} onclick="void(0)" id="${containerId}-prev">Prev</button>
-        <span class="page-info">Page ${page} of ${totalPages} (${total} total)</span>
-        <button ${offset + limit >= total ? 'disabled' : ''} onclick="void(0)" id="${containerId}-next">Next</button>
-    `;
-
-    document.getElementById(`${containerId}-prev`)?.addEventListener('click', () => {
-        callback(Math.max(0, offset - limit));
-    });
-    document.getElementById(`${containerId}-next`)?.addEventListener('click', () => {
-        callback(offset + limit);
-    });
-}
-
-async function selectComment(redditId) {
+async function loadCommentForWorkbench(redditId) {
+    if (selectedComments.has(redditId)) return;
     try {
         const data = await apiFetch(`/comments/${redditId}`);
-        selectedComment = data.data;
-        renderSelectedComment();
-        // Highlight in browse table
-        document.querySelectorAll('.browse-row').forEach(r => {
-            r.classList.toggle('selected', r.dataset.id === redditId);
-        });
+        selectedComments.set(redditId, data.data);
+        renderWorkbenchComments();
     } catch (e) {
-        console.error('Failed to load comment:', e);
+        console.error(`Failed to load comment ${redditId}:`, e);
     }
 }
 
-function renderSelectedComment() {
-    const cards = [
-        document.getElementById('selected-comment'),
-        document.getElementById('compare-comment'),
-    ];
+function updateSelectionUI() {
+    const countEl = document.getElementById('browse-selection-count');
+    const clearBtn = document.getElementById('browse-clear-sel');
+    const n = selectedIds.size;
 
-    cards.forEach(card => {
-        if (!card || !selectedComment) return;
-        const c = selectedComment;
-        card.classList.remove('empty');
-        card.innerHTML = `
-            <div class="meta">
-                <span><strong>${escapeHtml(c.reddit_id)}</strong></span>
-                <span>by ${escapeHtml(c.author)}</span>
-                <span>trust: ${(c.author_trust_score || 0.5).toFixed(2)}</span>
-                <span>post: "${escapeHtml(truncate(c.post_title, 50))}"</span>
-            </div>
-            <div class="body">${escapeHtml(c.body)}</div>
-            ${c.sentiment ? `<div class="analysis">
-                ${sentimentBadge(c.sentiment)}
-                <span>conf: ${c.ai_confidence?.toFixed(2) || '--'}</span>
-                <span>sarcasm: ${c.sarcasm_detected ? 'yes' : 'no'}</span>
-                <span>reasoning: ${c.has_reasoning ? 'yes' : 'no'}</span>
-            </div>` : ''}
-        `;
-    });
+    if (n > 0) {
+        countEl.textContent = `${n} selected`;
+        countEl.style.display = '';
+        clearBtn.style.display = '';
+    } else {
+        countEl.style.display = 'none';
+        clearBtn.style.display = 'none';
+    }
+
+    renderWorkbenchComments();
 }
+
+document.getElementById('browse-clear-sel').addEventListener('click', () => {
+    selectedIds.clear();
+    selectedComments.clear();
+    // Uncheck visible checkboxes
+    document.querySelectorAll('.browse-check').forEach(cb => {
+        cb.checked = false;
+        cb.closest('tr').classList.remove('selected');
+    });
+    const checkAll = document.getElementById('browse-check-all');
+    if (checkAll) checkAll.checked = false;
+    updateSelectionUI();
+});
 
 document.getElementById('browse-btn').addEventListener('click', () => browseComments(0));
 document.getElementById('browse-search').addEventListener('keydown', e => {
@@ -231,22 +338,225 @@ document.getElementById('browse-search').addEventListener('keydown', e => {
 });
 
 // ---------------------------------------------------------------------------
-// Analyze Tab
+// Workbench Tab — Selected Comments
 // ---------------------------------------------------------------------------
 
-document.getElementById('btn-dry-run').addEventListener('click', async () => {
-    if (!selectedComment) return alert('Select a comment first');
+function renderWorkbenchComments() {
+    const list = document.getElementById('wb-comment-list');
+    const countSpan = document.getElementById('wb-comment-count');
+    const n = selectedIds.size;
 
-    const configId = document.getElementById('analyze-config').value;
-    const marketCtx = document.getElementById('analyze-market-ctx').value;
+    countSpan.textContent = `(${n})`;
+
+    if (n === 0) {
+        list.innerHTML = '<p class="placeholder">Select comments from the Browse tab</p>';
+        return;
+    }
+
+    let html = '';
+    for (const rid of selectedIds) {
+        const c = selectedComments.get(rid);
+        const preview = c ? truncate(c.body, 50) : 'Loading...';
+        const author = c ? c.author : '';
+
+        html += `<div class="wb-comment-item" data-id="${escapeHtml(rid)}">
+            <div class="wb-comment-item-header">
+                <span class="expand-icon">&#9654;</span>
+                <span class="comment-id">${escapeHtml(rid)}</span>
+                <span class="comment-author">by ${escapeHtml(author)}</span>
+                <span class="comment-preview">${escapeHtml(preview)}</span>
+                <button class="remove-btn" data-id="${escapeHtml(rid)}" title="Remove">&times;</button>
+            </div>
+            <div class="wb-comment-context">
+                ${c ? renderCommentContext(c) : '<span class="spinner"></span> Loading...'}
+            </div>
+        </div>`;
+    }
+
+    list.innerHTML = html;
+
+    // Expand/collapse handlers
+    list.querySelectorAll('.wb-comment-item-header').forEach(header => {
+        header.addEventListener('click', (e) => {
+            if (e.target.classList.contains('remove-btn')) return;
+            header.closest('.wb-comment-item').classList.toggle('expanded');
+        });
+    });
+
+    // Remove handlers
+    list.querySelectorAll('.remove-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            selectedIds.delete(id);
+            selectedComments.delete(id);
+            // Uncheck in browse if visible
+            const cb = document.querySelector(`.browse-check[data-id="${id}"]`);
+            if (cb) { cb.checked = false; cb.closest('tr').classList.remove('selected'); }
+            updateSelectionUI();
+        });
+    });
+}
+
+function renderCommentContext(c) {
+    let html = '';
+
+    // Meta line
+    html += `<div class="context-meta">
+        <span>trust: ${(c.author_trust_score || 0.5).toFixed(2)}</span>
+        <span>score: ${c.score ?? '--'}</span>
+        ${c.sentiment ? `<span>${sentimentBadge(c.sentiment)} conf: ${c.ai_confidence?.toFixed(2) || '--'}</span>` : ''}
+    </div>`;
+
+    // Post title
+    if (c.post_title) {
+        html += `<div class="context-section">
+            <div class="context-label">Post Title</div>
+            <div>${escapeHtml(c.post_title)}</div>
+        </div>`;
+    }
+
+    // Post body
+    if (c.post_selftext) {
+        html += `<div class="context-section">
+            <div class="context-label">Post Body</div>
+            <div class="context-body">${escapeHtml(c.post_selftext)}</div>
+        </div>`;
+    }
+
+    // Image description
+    if (c.image_analysis) {
+        html += `<div class="context-section">
+            <div class="context-label">Image Description</div>
+            <div class="context-body">${escapeHtml(c.image_analysis)}</div>
+        </div>`;
+    }
+
+    // Parent chain
+    if (c.parent_chain && Array.isArray(c.parent_chain) && c.parent_chain.length > 0) {
+        html += `<div class="context-section">
+            <div class="context-label">Parent Chain</div>`;
+        c.parent_chain.forEach(p => {
+            html += `<div class="parent-chain-item">
+                <span class="chain-author">${escapeHtml(p.author || 'unknown')}</span>:
+                ${escapeHtml(p.body || '')}
+            </div>`;
+        });
+        html += '</div>';
+    }
+
+    // Comment body
+    html += `<div class="context-section">
+        <div class="context-label">Comment Body</div>
+        <div class="context-body">${escapeHtml(c.body)}</div>
+    </div>`;
+
+    return html;
+}
+
+document.getElementById('wb-clear-all').addEventListener('click', () => {
+    selectedIds.clear();
+    selectedComments.clear();
+    // Uncheck all visible browse checkboxes
+    document.querySelectorAll('.browse-check').forEach(cb => {
+        cb.checked = false;
+        cb.closest('tr').classList.remove('selected');
+    });
+    const checkAll = document.getElementById('browse-check-all');
+    if (checkAll) checkAll.checked = false;
+    updateSelectionUI();
+    // Clear matrix
+    matrixResults = {};
+    matrixColumns = [];
+    document.getElementById('wb-output').innerHTML = '';
+});
+
+// ---------------------------------------------------------------------------
+// Workbench Tab — Batch Run
+// ---------------------------------------------------------------------------
+
+document.getElementById('btn-batch-run').addEventListener('click', async () => {
+    if (selectedIds.size === 0) return showInlineError('wb-output', 'Select comments from the Browse tab first.');
+
+    const configId = document.getElementById('wb-config').value;
+    if (!configId) return showInlineError('wb-output', 'Select a config.');
+
+    const marketCtx = document.getElementById('wb-market-ctx').value;
+    const tag = document.getElementById('wb-tag').value || null;
 
     const body = {
-        reddit_id: selectedComment.reddit_id,
+        reddit_ids: [...selectedIds],
+        prompt_config_id: parseInt(configId),
+        market_context: marketCtx === 'off' ? false : null,
+        tag,
+    };
+
+    const output = document.getElementById('wb-output');
+    output.innerHTML = '<span class="spinner"></span> Running batch analysis...';
+
+    try {
+        const res = await fetch(`${API}/batch-analyze`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err?.error?.message || `HTTP ${res.status}`);
+        }
+
+        const cid = parseInt(configId);
+
+        // Add column if new
+        if (!matrixColumns.includes(cid)) {
+            matrixColumns.push(cid);
+        }
+
+        // Render matrix immediately with pending cells
+        renderMatrix();
+
+        for await (const event of parseSSE(res)) {
+            if (event.type === 'summary') {
+                renderBatchSummary(event);
+            } else if (event.error) {
+                // Store error in matrix
+                const key = `${event.reddit_id}|${cid}`;
+                matrixResults[key] = { error: event.error };
+                renderMatrix();
+            } else {
+                // Store result
+                const key = `${event.reddit_id}|${cid}`;
+                matrixResults[key] = {
+                    result: event.result,
+                    usage: event.usage,
+                    cost: event.cost,
+                    run_id: event.tuning_run_id,
+                };
+                renderMatrix();
+            }
+        }
+    } catch (e) {
+        output.innerHTML = `<p class="error-text">Error: ${escapeHtml(e.message)}</p>`;
+    }
+});
+
+document.getElementById('btn-wb-dry-run').addEventListener('click', async () => {
+    if (selectedIds.size === 0) return showInlineError('wb-output', 'Select comments from the Browse tab first.');
+
+    const configId = document.getElementById('wb-config').value;
+    const marketCtx = document.getElementById('wb-market-ctx').value;
+
+    // Use first selected comment
+    const firstId = [...selectedIds][0];
+
+    const body = {
+        reddit_id: firstId,
         prompt_config_id: configId ? parseInt(configId) : null,
         market_context: marketCtx === 'off' ? false : null,
     };
 
-    const output = document.getElementById('analyze-output');
+    const output = document.getElementById('wb-output');
     output.innerHTML = '<span class="spinner"></span> Building prompts...';
 
     try {
@@ -257,319 +567,358 @@ document.getElementById('btn-dry-run').addEventListener('click', async () => {
         const d = data.data;
         output.innerHTML = `
             <div class="result-panel">
-                <h3>Dry Run — Prompts Preview</h3>
+                <h3>Dry Run — Prompts Preview (${escapeHtml(firstId)})</h3>
                 <div class="prompt-display">
                     <span class="prompt-label">SYSTEM PROMPT</span>${escapeHtml(d.system_prompt)}
                 </div>
-                <div class="prompt-display" style="margin-top:8px">
+                <div class="prompt-display mt-8">
                     <span class="prompt-label">USER PROMPT</span>${escapeHtml(d.user_prompt)}
                 </div>
-                ${d.market_context ? `<div class="prompt-display" style="margin-top:8px">
+                ${d.market_context ? `<div class="prompt-display mt-8">
                     <span class="prompt-label">MARKET CONTEXT</span>${escapeHtml(d.market_context)}
                 </div>` : ''}
             </div>
         `;
     } catch (e) {
-        output.innerHTML = `<p style="color:var(--bearish)">Error: ${escapeHtml(e.message)}</p>`;
+        output.innerHTML = `<p class="error-text">Error: ${escapeHtml(e.message)}</p>`;
     }
 });
 
-document.getElementById('btn-analyze').addEventListener('click', async () => {
-    if (!selectedComment) return alert('Select a comment first');
-
-    const configId = document.getElementById('analyze-config').value;
-    const marketCtx = document.getElementById('analyze-market-ctx').value;
-    const tag = document.getElementById('analyze-tag').value || null;
-
-    const body = {
-        reddit_id: selectedComment.reddit_id,
-        prompt_config_id: configId ? parseInt(configId) : null,
-        market_context: marketCtx === 'off' ? false : null,
-        tag,
-    };
-
-    const output = document.getElementById('analyze-output');
-    output.innerHTML = '<span class="spinner"></span> Analyzing...';
-
-    try {
-        const data = await apiFetch('/analyze', {
-            method: 'POST',
-            body: JSON.stringify(body),
-        });
-        const r = data.data;
-        output.innerHTML = renderResult(r.result, r.usage, r.cost, r.tuning_run_id);
-    } catch (e) {
-        output.innerHTML = `<p style="color:var(--bearish)">Error: ${escapeHtml(e.message)}</p>`;
-    }
-});
-
-document.getElementById('btn-multi-run').addEventListener('click', async () => {
-    if (!selectedComment) return alert('Select a comment first');
-
-    const configId = document.getElementById('analyze-config').value;
-    const marketCtx = document.getElementById('analyze-market-ctx').value;
-    const tag = document.getElementById('analyze-tag').value || null;
-    const runs = parseInt(document.getElementById('multi-run-count').value) || 5;
-
-    const body = {
-        reddit_id: selectedComment.reddit_id,
-        prompt_config_id: configId ? parseInt(configId) : null,
-        market_context: marketCtx === 'off' ? false : null,
-        tag,
-        runs,
-    };
-
-    const output = document.getElementById('analyze-output');
-    output.innerHTML = '<span class="spinner"></span> Running multi-run analysis...';
-
-    try {
-        const res = await fetch(`${API}/multi-run`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        });
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-
-        let tableHtml = `<div class="multi-run-table"><table><thead><tr>
-            <th>#</th><th>Sentiment</th><th>Conf</th><th>Tickers</th><th>Sarcasm</th><th>Cost</th>
-        </tr></thead><tbody id="multi-run-body"></tbody></table></div>
-        <div id="multi-run-summary" class="multi-run-summary" style="display:none"></div>`;
-        output.innerHTML = tableHtml;
-
-        let buffer = '';
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-
-            const lines = buffer.split('\n');
-            buffer = lines.pop(); // keep incomplete line
-
-            for (const line of lines) {
-                if (!line.startsWith('data: ')) continue;
-                let json;
-                try { json = JSON.parse(line.slice(6)); }
-                catch { continue; }
-
-                if (json.type === 'summary') {
-                    const sumEl = document.getElementById('multi-run-summary');
-                    if (sumEl) {
-                        const counts = Object.entries(json.sentiment_counts)
-                            .map(([s, n]) => `${sentimentBadge(s)} ${n}/${json.total_runs}`)
-                            .join(' &nbsp; ');
-                        sumEl.style.display = 'block';
-                        sumEl.innerHTML = `
-                            <strong>Summary:</strong> ${counts}<br>
-                            Avg confidence: ${json.avg_confidence.toFixed(2)} &nbsp;|&nbsp;
-                            Total cost: ${formatCost(json.total_cost)}
-                        `;
-                    }
-                } else if (json.error) {
-                    const tbody = document.getElementById('multi-run-body');
-                    if (tbody) {
-                        tbody.innerHTML += `<tr>
-                            <td>${json.run}</td>
-                            <td colspan="5" style="color:var(--bearish)">Error: ${escapeHtml(json.error)}</td>
-                        </tr>`;
-                    }
-                } else {
-                    const r = json.result;
-                    const tickers = (r.tickers || []).map((t, i) =>
-                        `${t}(${(r.ticker_sentiments || [])[i] || '?'})`
-                    ).join(', ') || 'none';
-
-                    const tbody = document.getElementById('multi-run-body');
-                    if (tbody) {
-                        tbody.innerHTML += `<tr>
-                            <td>${json.run}</td>
-                            <td>${sentimentBadge(r.sentiment)}</td>
-                            <td>${r.confidence?.toFixed(2) || '--'}</td>
-                            <td>${escapeHtml(tickers)}</td>
-                            <td>${r.sarcasm_detected ? 'yes' : 'no'}</td>
-                            <td class="cost">${formatCost(json.cost)}</td>
-                        </tr>`;
-                    }
-                }
-            }
-        }
-    } catch (e) {
-        output.innerHTML = `<p style="color:var(--bearish)">Error: ${escapeHtml(e.message)}</p>`;
-    }
-});
-
-function renderResult(r, usage, cost, runId) {
-    const tickers = (r.tickers || []).map((t, i) =>
-        `${t}(${(r.ticker_sentiments || [])[i] || '?'})`
-    ).join(', ') || 'none';
-
-    return `<div class="result-panel">
-        <h3>Result ${runId ? `(run #${runId})` : ''}</h3>
-        <div class="result-grid">
-            <div class="result-field">
-                <span class="label">Sentiment</span>
-                <span class="value">${sentimentBadge(r.sentiment)}</span>
-            </div>
-            <div class="result-field">
-                <span class="label">Confidence</span>
-                <span class="value">${r.confidence?.toFixed(2) || '--'}</span>
-            </div>
-            <div class="result-field">
-                <span class="label">Tickers</span>
-                <span class="value">${escapeHtml(tickers)}</span>
-            </div>
-            <div class="result-field">
-                <span class="label">Sarcasm</span>
-                <span class="value">${r.sarcasm_detected ? 'yes' : 'no'}</span>
-            </div>
-            <div class="result-field">
-                <span class="label">Reasoning</span>
-                <span class="value">${r.has_reasoning ? 'yes' : 'no'}</span>
-            </div>
-            <div class="result-field">
-                <span class="label">Cost</span>
-                <span class="value cost">${formatCost(cost)}</span>
-            </div>
-        </div>
-        ${r.reasoning_summary ? `<div style="margin-top:8px;font-size:11px;color:var(--text-muted)">
-            <strong>Reasoning:</strong> ${escapeHtml(r.reasoning_summary)}
-        </div>` : ''}
-        <div style="margin-top:6px;font-size:10px;color:var(--text-muted)">
-            Tokens: ${usage.prompt_tokens} prompt / ${usage.completion_tokens} completion
-        </div>
-    </div>`;
+function showInlineError(elementId, msg) {
+    document.getElementById(elementId).innerHTML = `<p class="error-text">${escapeHtml(msg)}</p>`;
 }
 
 // ---------------------------------------------------------------------------
-// Compare Tab
+// Workbench Tab — Results Matrix
 // ---------------------------------------------------------------------------
 
-function updateCompareConfigList() {
-    const container = document.getElementById('compare-config-list');
-    if (!container) return;
+function renderMatrix() {
+    const output = document.getElementById('wb-output');
+    if (matrixColumns.length === 0) return;
 
-    // Keep at least 2 selects
-    const existing = container.querySelectorAll('select');
-    if (existing.length < 2) {
-        container.innerHTML = '';
-        for (let i = 0; i < 2; i++) addCompareConfigSelect(container);
-    }
-}
-
-function addCompareConfigSelect(container) {
-    if (!container) container = document.getElementById('compare-config-list');
-    const count = container.querySelectorAll('select').length;
-    if (count >= 5) return;
-
-    const sel = document.createElement('select');
-    sel.className = 'compare-config-select';
-    configs.forEach(c => {
-        const opt = document.createElement('option');
-        opt.value = c.id;
-        opt.textContent = `${c.name} (${c.model}, t=${c.temperature})`;
-        sel.appendChild(opt);
+    // Build column headers from configs
+    const colHeaders = matrixColumns.map(cid => {
+        const cfg = configs.find(c => c.id === cid);
+        return cfg ? `${cfg.name} (t=${cfg.temperature})` : `Config #${cid}`;
     });
-    // Default to different config if available
-    if (configs.length > count) {
-        sel.value = configs[count].id;
-    }
-    container.appendChild(sel);
+
+    let html = '<div class="results-matrix"><table><thead><tr>';
+    html += '<th>Comment</th>';
+    colHeaders.forEach(h => { html += `<th>${escapeHtml(h)}</th>`; });
+    html += '</tr></thead><tbody>';
+
+    const commentIds = [...selectedIds];
+
+    commentIds.forEach(rid => {
+        // Main row
+        html += `<tr>`;
+        html += `<td title="${escapeHtml(rid)}">${escapeHtml(rid)}</td>`;
+
+        matrixColumns.forEach(cid => {
+            const key = `${rid}|${cid}`;
+            const data = matrixResults[key];
+
+            if (!data) {
+                html += `<td class="matrix-cell pending">--</td>`;
+            } else if (data.error) {
+                html += `<td class="matrix-cell error-text" title="${escapeHtml(data.error)}">err</td>`;
+            } else {
+                const r = data.result;
+                html += `<td class="matrix-cell" data-key="${escapeHtml(key)}">
+                    ${sentimentBadge(r.sentiment)}
+                    <strong>${r.confidence?.toFixed(2) || '--'}</strong>
+                    <span class="cell-rerun" data-rid="${escapeHtml(rid)}" data-cid="${cid}" title="Re-run">&#8635;</span>
+                </td>`;
+            }
+        });
+
+        html += '</tr>';
+
+        // Detail row (hidden by default)
+        const totalCols = matrixColumns.length + 1;
+        html += `<tr class="matrix-detail-row" data-for="${escapeHtml(rid)}">
+            <td colspan="${totalCols}" id="detail-content-${escapeHtml(rid)}"></td>
+        </tr>`;
+    });
+
+    html += '</tbody></table></div>';
+
+    // Preserve summary if it exists
+    const existingSummary = output.querySelector('.batch-summary');
+    const summaryHtml = existingSummary ? existingSummary.outerHTML : '';
+
+    output.innerHTML = html + summaryHtml;
+
+    // Cell click handlers (expand detail)
+    output.querySelectorAll('.matrix-cell[data-key]').forEach(cell => {
+        cell.addEventListener('click', (e) => {
+            if (e.target.classList.contains('cell-rerun')) return;
+            const key = cell.dataset.key;
+            const rid = key.split('|')[0];
+            const detailRow = output.querySelector(`.matrix-detail-row[data-for="${rid}"]`);
+            if (!detailRow) return;
+
+            const wasOpen = detailRow.classList.contains('open');
+            // Close all detail rows
+            output.querySelectorAll('.matrix-detail-row').forEach(r => r.classList.remove('open'));
+
+            if (!wasOpen) {
+                const data = matrixResults[key];
+                if (data && !data.error) {
+                    detailRow.querySelector('td').innerHTML = renderResultFields(data.result, data.usage, data.cost);
+                }
+                detailRow.classList.add('open');
+            }
+        });
+    });
+
+    // Re-run handlers
+    output.querySelectorAll('.cell-rerun').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const rid = btn.dataset.rid;
+            const cid = parseInt(btn.dataset.cid);
+            btn.textContent = '...';
+            try {
+                const data = await apiFetch('/analyze', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        reddit_id: rid,
+                        prompt_config_id: cid,
+                        market_context: document.getElementById('wb-market-ctx').value === 'off' ? false : null,
+                        tag: document.getElementById('wb-tag').value || null,
+                    }),
+                });
+                const r = data.data;
+                matrixResults[`${rid}|${cid}`] = {
+                    result: r.result,
+                    usage: r.usage,
+                    cost: r.cost,
+                    run_id: r.tuning_run_id,
+                };
+                renderMatrix();
+            } catch (err) {
+                btn.textContent = '!';
+                btn.title = err.message;
+            }
+        });
+    });
 }
 
-document.getElementById('btn-add-config')?.addEventListener('click', () => {
-    addCompareConfigSelect();
-});
+function renderBatchSummary(event) {
+    const output = document.getElementById('wb-output');
+    // Remove existing summary
+    const existing = output.querySelector('.batch-summary');
+    if (existing) existing.remove();
 
-document.getElementById('btn-compare')?.addEventListener('click', async () => {
-    if (!selectedComment) return alert('Select a comment first');
+    const counts = Object.entries(event.sentiment_counts || {})
+        .map(([s, n]) => `${sentimentBadge(s)} ${n}/${event.total}`)
+        .join(' &nbsp; ');
 
-    const selects = document.querySelectorAll('.compare-config-select');
-    const configIds = [...selects].map(s => parseInt(s.value)).filter(Boolean);
+    const div = document.createElement('div');
+    div.className = 'batch-summary';
+    div.innerHTML = `
+        <strong>Batch Summary:</strong> ${counts}<br>
+        Success: ${event.success_count} | Errors: ${event.error_count} |
+        Total cost: ${formatCost(event.total_cost)}
+    `;
+    output.appendChild(div);
+}
 
-    if (configIds.length < 2) return alert('Select at least 2 configs');
+// ---------------------------------------------------------------------------
+// Configs Tab
+// ---------------------------------------------------------------------------
 
-    const marketCtx = document.getElementById('compare-market-ctx').value;
-
-    const body = {
-        reddit_id: selectedComment.reddit_id,
-        config_ids: configIds,
-        market_context: marketCtx === 'off' ? false : null,
-    };
-
-    const output = document.getElementById('compare-output');
-    output.innerHTML = '<span class="spinner"></span> Comparing configs...';
+async function loadConfigList() {
+    const container = document.getElementById('config-list');
+    container.innerHTML = '<span class="spinner"></span> Loading...';
 
     try {
-        const res = await fetch(`${API}/compare`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        });
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-
-        const results = [];
-        let buffer = '';
-
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-
-            const lines = buffer.split('\n');
-            buffer = lines.pop();
-
-            for (const line of lines) {
-                if (!line.startsWith('data: ')) continue;
-                let json;
-                try { json = JSON.parse(line.slice(6)); }
-                catch { continue; }
-                if (json.type === 'done') continue;
-                results.push(json);
-            }
-        }
-
-        // Render side-by-side
-        const colClass = `cols-${Math.min(results.length, 5)}`;
-        let html = `<div class="compare-grid ${colClass}">`;
-        results.forEach(r => {
-            if (r.error) {
-                html += `<div class="result-panel">
-                    <h3>Config ${escapeHtml(r.label)}: ${escapeHtml(r.config_name)}</h3>
-                    <p style="color:var(--bearish)">Error: ${escapeHtml(r.error)}</p>
-                </div>`;
-            } else {
-                html += `<div class="result-panel">
-                    <h3>Config ${escapeHtml(r.label)}: ${escapeHtml(r.config_name)}</h3>
-                    ${renderCompareResult(r.result, r.usage, r.cost)}
-                </div>`;
-            }
-        });
-        html += '</div>';
-
-        // Highlight differences
-        output.innerHTML = html;
-
+        await loadConfigs();  // refresh global configs
+        renderConfigList();
     } catch (e) {
-        output.innerHTML = `<p style="color:var(--bearish)">Error: ${escapeHtml(e.message)}</p>`;
+        container.innerHTML = `<p class="error-text">Error: ${escapeHtml(e.message)}</p>`;
     }
-});
-
-function renderCompareResult(r, usage, cost) {
-    const tickers = (r.tickers || []).map((t, i) =>
-        `${t}(${(r.ticker_sentiments || [])[i] || '?'})`
-    ).join(', ') || 'none';
-
-    return `
-        <div style="margin-bottom:6px">${sentimentBadge(r.sentiment)} <strong>${r.confidence?.toFixed(2) || '--'}</strong></div>
-        <div style="font-size:11px;margin-bottom:4px">Tickers: ${escapeHtml(tickers)}</div>
-        <div style="font-size:11px;margin-bottom:4px">Sarcasm: ${r.sarcasm_detected ? 'yes' : 'no'} | Reasoning: ${r.has_reasoning ? 'yes' : 'no'}</div>
-        ${r.reasoning_summary ? `<div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">${escapeHtml(truncate(r.reasoning_summary, 150))}</div>` : ''}
-        <div class="cost">${formatCost(cost)} | ${usage.prompt_tokens}+${usage.completion_tokens} tokens</div>
-    `;
 }
+
+function renderConfigList() {
+    const container = document.getElementById('config-list');
+    if (!configs.length) {
+        container.innerHTML = '<p class="muted-text">No configs found.</p>';
+        return;
+    }
+
+    let html = `<table class="config-table"><thead><tr>
+        <th>Name</th><th>Model</th><th>Temp</th><th>Max Tokens</th>
+        <th>Top P</th><th>Default</th><th>Actions</th>
+    </tr></thead><tbody>`;
+
+    configs.forEach(c => {
+        const starClass = c.is_default ? 'default-star' : 'default-star inactive';
+        html += `<tr data-config-id="${c.id}">
+            <td>${escapeHtml(c.name)}</td>
+            <td>${escapeHtml(c.model)}</td>
+            <td>${c.temperature}</td>
+            <td>${c.max_tokens}</td>
+            <td>${c.top_p}</td>
+            <td><span class="${starClass}" data-id="${c.id}" title="Set as default">&#9733;</span></td>
+            <td class="config-actions">
+                <button class="cfg-edit" data-id="${c.id}">Edit</button>
+                <button class="cfg-dup" data-id="${c.id}">Dup</button>
+                <button class="cfg-del danger" data-id="${c.id}">Del</button>
+            </td>
+        </tr>`;
+    });
+
+    html += '</tbody></table>';
+    container.innerHTML = html;
+
+    // Set-default handlers
+    container.querySelectorAll('.default-star').forEach(star => {
+        star.addEventListener('click', async () => {
+            try {
+                await apiFetch(`/configs/${star.dataset.id}/default`, { method: 'PUT' });
+                await loadConfigList();
+            } catch (e) {
+                alert(e.message);
+            }
+        });
+    });
+
+    // Edit handlers
+    container.querySelectorAll('.cfg-edit').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const cfg = configs.find(c => c.id === parseInt(btn.dataset.id));
+            if (cfg) showConfigForm(cfg);
+        });
+    });
+
+    // Duplicate handlers
+    container.querySelectorAll('.cfg-dup').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const cfg = configs.find(c => c.id === parseInt(btn.dataset.id));
+            if (cfg) {
+                const dup = { ...cfg, id: null, name: `${cfg.name} (copy)`, is_default: false };
+                showConfigForm(dup, true);
+            }
+        });
+    });
+
+    // Delete handlers
+    container.querySelectorAll('.cfg-del').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            if (!confirm('Delete this config? This cannot be undone.')) return;
+            try {
+                await apiFetch(`/configs/${btn.dataset.id}`, { method: 'DELETE' });
+                await loadConfigList();
+            } catch (e) {
+                alert(e.message);
+            }
+        });
+    });
+}
+
+function showConfigForm(config = null, isNew = false) {
+    const container = document.getElementById('config-form-container');
+    const isCreate = !config || !config.id || isNew;
+    const title = isCreate ? 'New Config' : `Edit: ${config.name}`;
+
+    container.innerHTML = `
+        <div class="config-form">
+            <h3>${escapeHtml(title)}</h3>
+            <div class="config-form-grid">
+                <div class="form-field">
+                    <label>Name</label>
+                    <input type="text" id="cf-name" value="${escapeHtml(config?.name || '')}" />
+                </div>
+                <div class="form-field">
+                    <label>Model</label>
+                    <input type="text" id="cf-model" value="${escapeHtml(config?.model || 'gpt-4o-mini')}" />
+                </div>
+                <div class="form-field">
+                    <label>Temperature</label>
+                    <input type="number" id="cf-temperature" value="${config?.temperature ?? 0.3}" min="0" max="2" step="0.1" />
+                </div>
+                <div class="form-field">
+                    <label>Max Tokens</label>
+                    <input type="number" id="cf-max-tokens" value="${config?.max_tokens ?? 500}" min="100" max="2000" />
+                </div>
+                <div class="form-field">
+                    <label>Top P</label>
+                    <input type="number" id="cf-top-p" value="${config?.top_p ?? 1.0}" min="0" max="1" step="0.05" />
+                </div>
+                <div class="form-field">
+                    <label>Frequency Penalty</label>
+                    <input type="number" id="cf-freq-penalty" value="${config?.frequency_penalty ?? ''}" min="-2" max="2" step="0.1" />
+                </div>
+                <div class="form-field">
+                    <label>Presence Penalty</label>
+                    <input type="number" id="cf-pres-penalty" value="${config?.presence_penalty ?? ''}" min="-2" max="2" step="0.1" />
+                </div>
+                <div class="form-field">
+                    <label>Provider</label>
+                    <input type="text" id="cf-provider" value="${escapeHtml(config?.provider || 'openai')}" />
+                </div>
+            </div>
+            <div class="config-form-grid full-width">
+                <div class="form-field">
+                    <label>System Prompt</label>
+                    <textarea id="cf-system-prompt">${escapeHtml(config?.system_prompt || '')}</textarea>
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="btn primary" id="cf-save">${isCreate ? 'Create' : 'Save'}</button>
+                <button class="btn" id="cf-cancel">Cancel</button>
+            </div>
+        </div>
+    `;
+
+    document.getElementById('cf-cancel').addEventListener('click', () => {
+        container.innerHTML = '';
+    });
+
+    document.getElementById('cf-save').addEventListener('click', async () => {
+        const payload = {
+            name: document.getElementById('cf-name').value.trim(),
+            system_prompt: document.getElementById('cf-system-prompt').value,
+            model: document.getElementById('cf-model').value.trim(),
+            temperature: parseFloat(document.getElementById('cf-temperature').value),
+            max_tokens: parseInt(document.getElementById('cf-max-tokens').value),
+            top_p: parseFloat(document.getElementById('cf-top-p').value),
+            provider: document.getElementById('cf-provider').value.trim(),
+        };
+
+        const freqPenalty = document.getElementById('cf-freq-penalty').value;
+        if (freqPenalty !== '') payload.frequency_penalty = parseFloat(freqPenalty);
+        const presPenalty = document.getElementById('cf-pres-penalty').value;
+        if (presPenalty !== '') payload.presence_penalty = parseFloat(presPenalty);
+
+        if (!payload.name) return alert('Name is required.');
+        if (!payload.system_prompt) return alert('System prompt is required.');
+
+        try {
+            if (isCreate) {
+                await apiFetch('/configs', {
+                    method: 'POST',
+                    body: JSON.stringify(payload),
+                });
+            } else {
+                await apiFetch(`/configs/${config.id}`, {
+                    method: 'PUT',
+                    body: JSON.stringify(payload),
+                });
+            }
+            container.innerHTML = '';
+            await loadConfigList();
+        } catch (e) {
+            alert(`Error: ${e.message}`);
+        }
+    });
+}
+
+document.getElementById('btn-new-config').addEventListener('click', () => {
+    showConfigForm(null, true);
+});
 
 // ---------------------------------------------------------------------------
 // History Tab
@@ -594,14 +943,14 @@ async function loadHistory(offset = 0) {
         renderHistory(data.data, data.meta.total);
     } catch (e) {
         document.getElementById('history-results').innerHTML =
-            `<p style="color:var(--bearish)">Error: ${escapeHtml(e.message)}</p>`;
+            `<p class="error-text">Error: ${escapeHtml(e.message)}</p>`;
     }
 }
 
 function renderHistory(items, total) {
     const container = document.getElementById('history-results');
     if (!items.length) {
-        container.innerHTML = '<p style="color:var(--text-muted)">No tuning runs found.</p>';
+        container.innerHTML = '<p class="muted-text">No tuning runs found.</p>';
         document.getElementById('history-pagination').innerHTML = '';
         return;
     }
@@ -625,7 +974,7 @@ function renderHistory(items, total) {
             <td>${r.created_at ? r.created_at.slice(0, 16) : '--'}</td>
         </tr>
         <tr class="history-detail" id="detail-${r.id}"><td colspan="9">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div class="history-detail-grid">
                 <div>
                     <strong>Reasoning:</strong> ${escapeHtml(r.reasoning_summary || 'none')}<br>
                     <strong>Tickers:</strong> ${escapeHtml(r.tickers || '[]')}<br>
@@ -634,7 +983,7 @@ function renderHistory(items, total) {
                     <strong>Tokens:</strong> ${r.prompt_tokens || 0} prompt / ${r.completion_tokens || 0} completion
                 </div>
                 <div>
-                    ${r.user_prompt ? `<div class="prompt-display" style="max-height:200px;font-size:10px">${escapeHtml(truncate(r.user_prompt, 500))}</div>` : ''}
+                    ${r.user_prompt ? `<div class="prompt-display prompt-display-compact">${escapeHtml(truncate(r.user_prompt, 500))}</div>` : ''}
                 </div>
             </div>
         </td></tr>`;
@@ -655,6 +1004,12 @@ function renderHistory(items, total) {
 }
 
 document.getElementById('history-btn').addEventListener('click', () => loadHistory(0));
+document.getElementById('history-reddit-id').addEventListener('keydown', e => {
+    if (e.key === 'Enter') loadHistory(0);
+});
+document.getElementById('history-tag').addEventListener('keydown', e => {
+    if (e.key === 'Enter') loadHistory(0);
+});
 
 // ---------------------------------------------------------------------------
 // Init

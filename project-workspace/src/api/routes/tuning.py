@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from src.api.responses import wrap_response, raise_api_error, NOT_FOUND, VALIDATION_ERROR
 from src.tuning import (
     load_comment,
+    load_comments,
     search_comments,
     build_prompts,
     run_analysis,
@@ -26,6 +27,9 @@ from src.tuning import (
     get_prompt_config,
     list_prompt_configs,
     create_prompt_config,
+    update_prompt_config,
+    delete_prompt_config,
+    set_default_prompt_config,
     save_tuning_run,
     get_tuning_history,
     config_to_call_kwargs,
@@ -74,6 +78,32 @@ class PromptConfigCreate(BaseModel):
     base_model: Optional[str] = None
     fine_tune_job_id: Optional[str] = None
     fine_tune_suffix: Optional[str] = None
+
+
+class PromptConfigUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=100)
+    system_prompt: Optional[str] = None
+    provider: Optional[str] = None
+    api_base_url: Optional[str] = None
+    model: Optional[str] = None
+    temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
+    top_p: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    max_tokens: Optional[int] = Field(default=None, ge=100, le=2000)
+    top_k: Optional[int] = None
+    frequency_penalty: Optional[float] = Field(default=None, ge=-2.0, le=2.0)
+    presence_penalty: Optional[float] = Field(default=None, ge=-2.0, le=2.0)
+    response_format: Optional[str] = None
+    is_fine_tuned: Optional[bool] = None
+    base_model: Optional[str] = None
+    fine_tune_job_id: Optional[str] = None
+    fine_tune_suffix: Optional[str] = None
+
+
+class BatchAnalyzeRequest(BaseModel):
+    reddit_ids: List[str] = Field(min_length=1, max_length=50)
+    prompt_config_id: Optional[int] = None
+    market_context: Optional[Union[bool, str]] = None
+    tag: Optional[str] = None
 
 
 class DryRunRequest(BaseModel):
@@ -157,6 +187,42 @@ async def get_config(request: Request, config_id: int):
     """Get a single prompt config."""
     db = _get_db(request)
     config = get_prompt_config(db, config_id)
+    if not config:
+        raise_api_error(NOT_FOUND, f"Prompt config {config_id} not found")
+    return wrap_response(config)
+
+
+@router.put("/configs/{config_id}")
+async def update_config(request: Request, config_id: int, body: PromptConfigUpdate):
+    """Update a prompt config."""
+    db = _get_db(request)
+    updates = body.model_dump(exclude_none=True)
+    if not updates:
+        raise_api_error(VALIDATION_ERROR, "No fields to update")
+    config = update_prompt_config(db, config_id, **updates)
+    if not config:
+        raise_api_error(NOT_FOUND, f"Prompt config {config_id} not found")
+    return wrap_response(config)
+
+
+@router.delete("/configs/{config_id}")
+async def remove_config(request: Request, config_id: int):
+    """Delete a prompt config."""
+    db = _get_db(request)
+    try:
+        deleted = delete_prompt_config(db, config_id)
+    except ValueError as e:
+        raise_api_error(VALIDATION_ERROR, str(e))
+    if not deleted:
+        raise_api_error(NOT_FOUND, f"Prompt config {config_id} not found")
+    return wrap_response({"deleted": True, "id": config_id})
+
+
+@router.put("/configs/{config_id}/default")
+async def set_config_default(request: Request, config_id: int):
+    """Set a prompt config as the default."""
+    db = _get_db(request)
+    config = set_default_prompt_config(db, config_id)
     if not config:
         raise_api_error(NOT_FOUND, f"Prompt config {config_id} not found")
     return wrap_response(config)
@@ -392,6 +458,90 @@ async def compare(request: Request, body: CompareRequest):
                 yield f"data: {error_data}\n\n"
 
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# ---------------------------------------------------------------------------
+# Batch Analyze (SSE)
+# ---------------------------------------------------------------------------
+
+@router.post("/batch-analyze")
+async def batch_analyze(request: Request, body: BatchAnalyzeRequest):
+    """Run analysis on multiple comments with one config via SSE."""
+    db = _get_db(request)
+
+    config = _resolve_config(db, body.prompt_config_id)
+    market_ctx = resolve_market_context(body.market_context)
+
+    # Validate all comments exist
+    comments = load_comments(db, body.reddit_ids)
+    found_ids = {c["reddit_id"] for c in comments}
+    missing = [rid for rid in body.reddit_ids if rid not in found_ids]
+    if missing:
+        raise_api_error(NOT_FOUND, f"Comments not found: {', '.join(missing)}")
+
+    call_kwargs = config_to_call_kwargs(config)
+    call_kwargs["market_context"] = market_ctx
+
+    async def generate():
+        total_cost = 0.0
+        sentiments = []
+        success_count = 0
+        error_count = 0
+
+        for comment in comments:
+            try:
+                _, user_prompt = build_prompts(
+                    comment, market_ctx, config["system_prompt"]
+                )
+                parsed, usage = run_analysis(comment, call_kwargs)
+                cost = calculate_cost(usage)
+                total_cost += cost
+                sentiments.append(parsed["sentiment"])
+                success_count += 1
+
+                run_id = save_tuning_run(
+                    db,
+                    comment_id=comment["id"],
+                    prompt_config_id=config["id"],
+                    parsed=parsed,
+                    usage=usage,
+                    cost=cost,
+                    mode="batch",
+                    tag=body.tag,
+                    market_context_used=market_ctx,
+                    user_prompt=user_prompt,
+                )
+
+                event_data = json.dumps({
+                    "reddit_id": comment["reddit_id"],
+                    "result": parsed,
+                    "usage": usage,
+                    "cost": cost,
+                    "tuning_run_id": run_id,
+                })
+                yield f"data: {event_data}\n\n"
+
+            except Exception as e:
+                error_count += 1
+                error_data = json.dumps({
+                    "reddit_id": comment["reddit_id"],
+                    "error": str(e),
+                })
+                yield f"data: {error_data}\n\n"
+
+        # Summary event
+        counts = Counter(sentiments)
+        summary = {
+            "type": "summary",
+            "total": len(comments),
+            "success_count": success_count,
+            "error_count": error_count,
+            "total_cost": total_cost,
+            "sentiment_counts": dict(counts),
+        }
+        yield f"data: {json.dumps(summary)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

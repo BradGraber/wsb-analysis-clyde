@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import structlog
 
-from src.prompts import SYSTEM_PROMPT, build_user_prompt
+from src.prompts import SYSTEM_PROMPT, build_user_prompt, format_parent_chain
 from src.ai_parser import parse_ai_response, normalize_tickers
 from src.market_context import fetch_market_context, should_include_context, format_market_context
 
@@ -45,7 +45,8 @@ def load_comment(conn: sqlite3.Connection, reddit_id: str) -> Optional[Dict[str,
                c.parent_chain, c.sentiment, c.ai_confidence,
                c.sarcasm_detected, c.has_reasoning, c.reasoning_summary,
                c.score, c.created_utc, c.prioritization_score,
-               p.title AS post_title, p.image_analysis
+               p.title AS post_title, p.selftext AS post_selftext,
+               p.image_urls, p.image_analysis
         FROM comments c
         JOIN reddit_posts p ON c.post_id = p.id
         WHERE c.reddit_id = ?
@@ -54,7 +55,67 @@ def load_comment(conn: sqlite3.Connection, reddit_id: str) -> Optional[Dict[str,
     if row is None:
         return None
 
-    return dict(row)
+    result = dict(row)
+    # Parse JSON fields for frontend consumption
+    if result.get("parent_chain"):
+        try:
+            result["parent_chain"] = json.loads(result["parent_chain"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+    if result.get("image_urls"):
+        try:
+            result["image_urls"] = json.loads(result["image_urls"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return result
+
+
+def load_comments(
+    conn: sqlite3.Connection, reddit_ids: List[str]
+) -> List[Dict[str, Any]]:
+    """Batch-load comments with full context.
+
+    Args:
+        conn: SQLite connection
+        reddit_ids: List of reddit comment IDs
+
+    Returns:
+        List of comment dicts (same fields as load_comment), ordered by input list
+    """
+    if not reddit_ids:
+        return []
+
+    placeholders = ",".join(["?"] * len(reddit_ids))
+    rows = conn.execute(f"""
+        SELECT c.id, c.reddit_id, c.body, c.author, c.author_trust_score,
+               c.parent_chain, c.sentiment, c.ai_confidence,
+               c.sarcasm_detected, c.has_reasoning, c.reasoning_summary,
+               c.score, c.created_utc, c.prioritization_score,
+               p.title AS post_title, p.selftext AS post_selftext,
+               p.image_urls, p.image_analysis
+        FROM comments c
+        JOIN reddit_posts p ON c.post_id = p.id
+        WHERE c.reddit_id IN ({placeholders})
+    """, reddit_ids).fetchall()
+
+    # Parse JSON fields and build lookup
+    by_id = {}
+    for row in rows:
+        result = dict(row)
+        if result.get("parent_chain"):
+            try:
+                result["parent_chain"] = json.loads(result["parent_chain"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if result.get("image_urls"):
+            try:
+                result["image_urls"] = json.loads(result["image_urls"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        by_id[result["reddit_id"]] = result
+
+    # Preserve input order
+    return [by_id[rid] for rid in reddit_ids if rid in by_id]
 
 
 def search_comments(
@@ -133,10 +194,14 @@ def build_prompts(
         Tuple of (system_prompt, user_prompt)
     """
     sys_prompt = system_prompt_override or SYSTEM_PROMPT
+    # parent_chain may be a parsed list (from load_comment) or a raw JSON string
+    pc = comment.get("parent_chain") or ""
+    if isinstance(pc, list):
+        pc = format_parent_chain(pc)
     user_prompt = build_user_prompt(
         post_title=comment.get("post_title", "WSB Discussion"),
         image_description=comment.get("image_analysis"),
-        parent_chain_formatted=comment.get("parent_chain") or "",
+        parent_chain_formatted=pc,
         author=comment.get("author", "unknown"),
         author_trust=comment.get("author_trust_score") or 0.5,
         comment_body=comment.get("body", ""),
@@ -568,3 +633,90 @@ def config_to_call_kwargs(config: Dict[str, Any]) -> Dict[str, Any]:
         "response_format": config.get("response_format", "json_object"),
         "api_base_url": config.get("api_base_url"),
     }
+
+
+def update_prompt_config(
+    conn: sqlite3.Connection, config_id: int, **kwargs
+) -> Optional[Dict[str, Any]]:
+    """Update a prompt config by ID.
+
+    Args:
+        conn: SQLite connection
+        config_id: Config to update
+        **kwargs: Fields to update (only whitelisted fields applied)
+
+    Returns:
+        Updated config dict, or None if not found
+    """
+    existing = get_prompt_config(conn, config_id)
+    if not existing:
+        return None
+
+    fields = [
+        "name", "system_prompt", "provider", "api_base_url", "model",
+        "temperature", "top_p", "max_tokens", "top_k",
+        "frequency_penalty", "presence_penalty", "response_format",
+        "is_fine_tuned", "base_model", "fine_tune_job_id", "fine_tune_suffix",
+    ]
+
+    sets = []
+    vals = []
+    for f in fields:
+        if f in kwargs:
+            sets.append(f"{f} = ?")
+            vals.append(kwargs[f])
+
+    if not sets:
+        return existing
+
+    vals.append(config_id)
+    conn.execute(
+        f"UPDATE prompt_configs SET {', '.join(sets)} WHERE id = ?",
+        vals,
+    )
+    conn.commit()
+    return get_prompt_config(conn, config_id)
+
+
+def delete_prompt_config(conn: sqlite3.Connection, config_id: int) -> bool:
+    """Delete a prompt config.
+
+    Returns False if not found.
+    Raises ValueError if config is the default or referenced by tuning_runs.
+    """
+    config = get_prompt_config(conn, config_id)
+    if not config:
+        return False
+    if config.get("is_default"):
+        raise ValueError("Cannot delete the default config")
+
+    ref_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM tuning_runs WHERE prompt_config_id = ?",
+        (config_id,),
+    ).fetchone()["cnt"]
+    if ref_count > 0:
+        raise ValueError(
+            f"Cannot delete config referenced by {ref_count} tuning run(s)"
+        )
+
+    conn.execute("DELETE FROM prompt_configs WHERE id = ?", (config_id,))
+    conn.commit()
+    return True
+
+
+def set_default_prompt_config(
+    conn: sqlite3.Connection, config_id: int
+) -> Optional[Dict[str, Any]]:
+    """Set a config as the default (clears previous default).
+
+    Returns:
+        Updated config dict, or None if not found
+    """
+    config = get_prompt_config(conn, config_id)
+    if not config:
+        return None
+
+    conn.execute("UPDATE prompt_configs SET is_default = 0 WHERE is_default = 1")
+    conn.execute("UPDATE prompt_configs SET is_default = 1 WHERE id = ?", (config_id,))
+    conn.commit()
+    return get_prompt_config(conn, config_id)

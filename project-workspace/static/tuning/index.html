@@ -11,8 +11,8 @@
         <h1>WSB Tuning Workbench</h1>
         <nav id="tabs">
             <button class="tab active" data-tab="browse">Browse</button>
-            <button class="tab" data-tab="analyze">Analyze</button>
-            <button class="tab" data-tab="compare">Compare</button>
+            <button class="tab" data-tab="workbench">Workbench</button>
+            <button class="tab" data-tab="configs">Configs</button>
             <button class="tab" data-tab="history">History</button>
         </nav>
     </header>
@@ -29,48 +29,44 @@
                     <option value="neutral">Neutral</option>
                 </select>
                 <button id="browse-btn" class="btn">Search</button>
+                <span id="browse-selection-count" class="selection-count" style="display:none"></span>
+                <button id="browse-clear-sel" class="btn small" style="display:none">Clear Selection</button>
             </div>
             <div id="browse-results"></div>
             <div id="browse-pagination" class="pagination"></div>
         </section>
 
-        <!-- Analyze Tab -->
-        <section id="tab-analyze" class="tab-content">
-            <div id="selected-comment" class="comment-card empty">
-                <p class="placeholder">Select a comment from the Browse tab</p>
+        <!-- Workbench Tab -->
+        <section id="tab-workbench" class="tab-content">
+            <div id="workbench-comments" class="workbench-comments">
+                <div class="workbench-comments-header">
+                    <h3>Selected Comments <span id="wb-comment-count">(0)</span></h3>
+                    <button id="wb-clear-all" class="btn small">Clear All</button>
+                </div>
+                <div id="wb-comment-list" class="wb-comment-list">
+                    <p class="placeholder">Select comments from the Browse tab</p>
+                </div>
             </div>
             <div class="controls">
-                <select id="analyze-config"></select>
-                <select id="analyze-market-ctx">
+                <select id="wb-config"></select>
+                <select id="wb-market-ctx">
                     <option value="auto">Market context: auto</option>
                     <option value="off">Market context: off</option>
                 </select>
-                <input type="text" id="analyze-tag" placeholder="Tag (optional)" />
+                <input type="text" id="wb-tag" placeholder="Tag (optional)" />
+                <button id="btn-batch-run" class="btn primary">Run</button>
+                <button id="btn-wb-dry-run" class="btn">Dry Run</button>
             </div>
-            <div class="controls">
-                <button id="btn-dry-run" class="btn">Dry Run</button>
-                <button id="btn-analyze" class="btn primary">Analyze</button>
-                <button id="btn-multi-run" class="btn">Multi-Run</button>
-                <label>Runs: <input type="number" id="multi-run-count" value="5" min="2" max="20" style="width:50px" /></label>
-            </div>
-            <div id="analyze-output"></div>
+            <div id="wb-output"></div>
         </section>
 
-        <!-- Compare Tab -->
-        <section id="tab-compare" class="tab-content">
-            <div id="compare-comment" class="comment-card empty">
-                <p class="placeholder">Select a comment from the Browse tab</p>
-            </div>
+        <!-- Configs Tab -->
+        <section id="tab-configs" class="tab-content">
             <div class="controls">
-                <div id="compare-config-list"></div>
-                <button id="btn-add-config" class="btn small">+ Add Config</button>
-                <select id="compare-market-ctx">
-                    <option value="auto">Market context: auto</option>
-                    <option value="off">Market context: off</option>
-                </select>
-                <button id="btn-compare" class="btn primary">Compare</button>
+                <button id="btn-new-config" class="btn primary">+ New Config</button>
             </div>
-            <div id="compare-output"></div>
+            <div id="config-form-container"></div>
+            <div id="config-list"></div>
         </section>
 
         <!-- History Tab -->
