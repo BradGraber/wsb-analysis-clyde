@@ -21,12 +21,16 @@ except ImportError:
 logger = structlog.get_logger(__name__)
 
 
-# Module-level constant for financial keyword detection
+# Module-level constants
 FINANCIAL_KEYWORDS = [
     'calls', 'puts', 'options', 'strike', 'expiry', 'DD', 'due diligence',
     'earnings', 'revenue', 'P/E', 'market cap', 'short', 'long', 'squeeze',
     'gamma', 'theta', 'delta', 'IV', 'implied volatility'
 ]
+
+# Minimum word count for comment filtering. Comments below this threshold
+# are filtered out unless they contain a financial keyword.
+MIN_WORD_COUNT = 5
 
 
 def score_financial_keywords(
@@ -250,6 +254,35 @@ def calculate_depth_penalty(depth: int) -> float:
     return round(min(0.3, depth * 0.05), 2)
 
 
+def calculate_length_bonus(word_count: int, max_bonus: float = 0.2) -> float:
+    """
+    Calculate length bonus for longer, more substantive comments.
+
+    Linear scale from MIN_WORD_COUNT to 100 words. Comments at or below
+    MIN_WORD_COUNT get no bonus; comments with 100+ words get max_bonus.
+
+    Args:
+        word_count: Number of whitespace-separated words in the comment
+        max_bonus: Maximum bonus for long comments (default: 0.2)
+
+    Returns:
+        float: Length bonus in range [0.0, max_bonus]
+
+    Examples:
+        >>> calculate_length_bonus(5)
+        0.0
+        >>> calculate_length_bonus(50)
+        0.0947
+        >>> calculate_length_bonus(100)
+        0.2
+        >>> calculate_length_bonus(200)
+        0.2
+    """
+    if word_count <= MIN_WORD_COUNT:
+        return 0.0
+    return round(min(max_bonus, (word_count - MIN_WORD_COUNT) * max_bonus / (100 - MIN_WORD_COUNT)), 4)
+
+
 def normalize_engagement_scores(comments: list[dict]) -> list[dict]:
     """
     Normalize engagement scores to [0, 1] range using min-max normalization.
@@ -302,12 +335,13 @@ def calculate_priority_score(
     author_trust: float,
     engagement_normalized: float,
     depth_penalty: float,
-    weights: tuple = (0.4, 0.3, 0.3)
+    weights: tuple = (0.4, 0.3, 0.3),
+    length_bonus: float = 0.0
 ) -> float:
     """
     Calculate priority score for comment selection.
 
-    Formula: (financial × w1) + (trust × w2) + (engagement × w3) - depth_penalty
+    Formula: (financial × w1) + (trust × w2) + (engagement × w3) - depth_penalty + length_bonus
 
     Result is clamped to minimum 0.0 to avoid negative scores.
 
@@ -318,10 +352,11 @@ def calculate_priority_score(
         depth_penalty: Depth penalty [0.0, 0.3]
         weights: Tuple of (financial_weight, trust_weight, engagement_weight)
                  Defaults to (0.4, 0.3, 0.3)
+        length_bonus: Bonus for longer comments [0.0, 0.2] (default: 0.0)
 
     Returns:
         float: Priority score >= 0.0
-        - Returns max(0.0, weighted_sum - depth_penalty)
+        - Returns max(0.0, weighted_sum - depth_penalty + length_bonus)
         - Default weights: financial=0.4, trust=0.3, engagement=0.3
 
     Examples:
@@ -331,6 +366,8 @@ def calculate_priority_score(
         0.0
         >>> calculate_priority_score(0.8, 0.6, 0.7, 0.15, weights=(0.5, 0.3, 0.2))
         0.57
+        >>> calculate_priority_score(0.8, 0.6, 0.7, 0.15, length_bonus=0.2)
+        0.72
     """
     # Unpack weights
     w_financial, w_trust, w_engagement = weights
@@ -342,8 +379,8 @@ def calculate_priority_score(
         (engagement_normalized * w_engagement)
     )
 
-    # Subtract depth penalty and clamp to minimum 0.0
-    priority = weighted_sum - depth_penalty
+    # Subtract depth penalty, add length bonus, clamp to minimum 0.0
+    priority = weighted_sum - depth_penalty + length_bonus
 
     return max(0.0, priority)
 
@@ -391,25 +428,30 @@ def select_top_comments(comments: list[dict], top_n: int = 50) -> list[dict]:
 def score_and_select_comments(
     posts: list,
     weights: tuple = (0.4, 0.3, 0.3),
-    top_n: int = 50
+    top_n: int = 50,
+    min_words: int = MIN_WORD_COUNT
 ) -> list:
     """
     Score all comments and select top N per post.
 
     Processes a list of ProcessedPost objects by:
-    1. Calculating composite priority_score for each comment using the weighted formula
-    2. Ranking comments within each post by priority_score descending
-    3. Selecting the top N comments per post
-    4. Discarding non-selected comments from ProcessedPost.comments
+    1. Filtering out short comments (below min_words) unless they contain financial keywords
+    2. Calculating composite priority_score for each comment using the weighted formula
+    3. Ranking comments within each post by priority_score descending
+    4. Selecting the top N comments per post
+    5. Discarding non-selected comments from ProcessedPost.comments
 
     Args:
         posts: List of ProcessedPost objects with comments to score
         weights: Tuple of (financial_weight, trust_weight, engagement_weight)
                  Defaults to (0.4, 0.3, 0.3)
         top_n: Number of top comments to select per post (default: 50)
+        min_words: Minimum word count threshold (default: MIN_WORD_COUNT).
+                   Comments below this are filtered unless they contain financial keywords.
 
     Returns:
         list: Same list of ProcessedPost objects with:
+        - Short non-financial comments removed
         - Each comment's priority_score field populated
         - Only top N comments retained in each post's comments list
         - Posts with fewer than N comments retain all comments
@@ -421,29 +463,34 @@ def score_and_select_comments(
         - Comments must already have financial_score, author_trust_score,
           engagement (normalized), and depth populated
         - The depth_penalty is calculated automatically from comment.depth
-
-    Examples:
-        >>> from src.models.reddit_models import ProcessedPost, ProcessedComment
-        >>> post = ProcessedPost(
-        ...     reddit_id='p1', title='Test', selftext='', upvotes=100, total_comments=2,
-        ...     comments=[
-        ...         ProcessedComment(
-        ...             reddit_id='c1', post_id='p1', author='user1', body='text',
-        ...             score=10, depth=0, created_utc=1234567890,
-        ...             financial_score=0.8, author_trust_score=0.6
-        ...         )
-        ...     ]
-        ... )
-        >>> # Note: Must calculate engagement and populate first
-        >>> result = score_and_select_comments([post], weights=(0.4, 0.3, 0.3), top_n=50)
-        >>> result[0].comments[0].priority_score > 0
-        True
+        - The length_bonus is calculated automatically from word count
     """
     for post in posts:
+        # Filter short comments: keep if >= min_words OR has financial keywords
+        original_count = len(post.comments)
+        post.comments = [
+            c for c in post.comments
+            if len(c.body.split()) >= min_words
+            or score_financial_keywords(c.body) > 0
+        ]
+        filtered_count = original_count - len(post.comments)
+        if filtered_count > 0:
+            logger.info(
+                "Filtered short comments",
+                post_id=post.reddit_id,
+                filtered=filtered_count,
+                retained=len(post.comments),
+                min_words=min_words,
+            )
+
         # Calculate priority_score for each comment
         for comment in post.comments:
             # Calculate depth penalty
             depth_penalty = calculate_depth_penalty(comment.depth)
+
+            # Calculate length bonus
+            word_count = len(comment.body.split())
+            length_bon = calculate_length_bonus(word_count)
 
             # Get normalized engagement (should already be calculated)
             # If not present, assume 0.0
@@ -455,7 +502,8 @@ def score_and_select_comments(
                 author_trust=comment.author_trust_score,
                 engagement_normalized=engagement_norm,
                 depth_penalty=depth_penalty,
-                weights=weights
+                weights=weights,
+                length_bonus=length_bon,
             )
 
             # Populate priority_score field

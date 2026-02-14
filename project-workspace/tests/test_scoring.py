@@ -326,3 +326,212 @@ class TestPriorityScoringAndSelection:
         assert selected[0]['id'] == 'high'
         # 'low' should be discarded
         assert all(c['id'] != 'low' for c in selected)
+
+    def test_priority_score_with_length_bonus(self):
+        """Length bonus adds to priority score."""
+        from src.scoring import calculate_priority_score
+
+        base = calculate_priority_score(0.8, 0.6, 0.7, 0.15)
+        with_bonus = calculate_priority_score(0.8, 0.6, 0.7, 0.15, length_bonus=0.2)
+
+        assert with_bonus == base + 0.2
+
+
+class TestLengthBonus:
+    """Test length bonus calculation."""
+
+    def test_at_min_word_count_returns_zero(self):
+        """Comments at MIN_WORD_COUNT get no bonus."""
+        from src.scoring import calculate_length_bonus, MIN_WORD_COUNT
+
+        assert calculate_length_bonus(MIN_WORD_COUNT) == 0.0
+
+    def test_below_min_word_count_returns_zero(self):
+        """Comments below MIN_WORD_COUNT get no bonus."""
+        from src.scoring import calculate_length_bonus
+
+        assert calculate_length_bonus(0) == 0.0
+        assert calculate_length_bonus(3) == 0.0
+
+    def test_scales_linearly(self):
+        """Bonus scales linearly between MIN_WORD_COUNT and 100."""
+        from src.scoring import calculate_length_bonus
+
+        b50 = calculate_length_bonus(50)
+        b75 = calculate_length_bonus(75)
+        b100 = calculate_length_bonus(100)
+
+        assert 0.0 < b50 < b75 < b100
+
+    def test_caps_at_max_bonus(self):
+        """Bonus caps at max_bonus for 100+ words."""
+        from src.scoring import calculate_length_bonus
+
+        assert calculate_length_bonus(100) == 0.2
+        assert calculate_length_bonus(200) == 0.2
+        assert calculate_length_bonus(500) == 0.2
+
+    def test_custom_max_bonus(self):
+        """Custom max_bonus parameter works."""
+        from src.scoring import calculate_length_bonus
+
+        bonus = calculate_length_bonus(100, max_bonus=0.5)
+        assert bonus == 0.5
+
+
+class TestMinWordFilter:
+    """Test minimum word count filter with keyword exemption."""
+
+    def _make_comment(self, body, financial_score=0.0, author_trust_score=0.5,
+                      depth=0, score=1, engagement_normalized=0.0):
+        """Create a mock ProcessedComment-like object."""
+        from dataclasses import dataclass, field
+
+        @dataclass
+        class MockComment:
+            reddit_id: str = 'test'
+            post_id: str = 'p1'
+            author: str = 'testuser'
+            body: str = ''
+            score: int = 1
+            depth: int = 0
+            created_utc: int = 1234567890
+            financial_score: float = 0.0
+            author_trust_score: float = 0.5
+            priority_score: float = 0.0
+            engagement_normalized: float = 0.0
+            parent_chain: list = field(default_factory=list)
+
+        return MockComment(
+            body=body,
+            financial_score=financial_score,
+            author_trust_score=author_trust_score,
+            depth=depth,
+            score=score,
+            engagement_normalized=engagement_normalized,
+        )
+
+    def _make_post(self, comments):
+        """Create a mock ProcessedPost-like object."""
+        from dataclasses import dataclass, field
+
+        @dataclass
+        class MockPost:
+            reddit_id: str = 'p1'
+            title: str = 'Test Post'
+            selftext: str = ''
+            upvotes: int = 100
+            total_comments: int = 0
+            comments: list = field(default_factory=list)
+
+        return MockPost(comments=comments, total_comments=len(comments))
+
+    def test_short_comment_no_keywords_filtered(self):
+        """Short comments without financial keywords are filtered out."""
+        from src.scoring import score_and_select_comments
+
+        comments = [
+            self._make_comment('Nice'),
+            self._make_comment('This is a longer comment about the market today and stuff'),
+        ]
+        posts = [self._make_post(comments)]
+
+        result = score_and_select_comments(posts)
+
+        assert len(result[0].comments) == 1
+        assert 'longer comment' in result[0].comments[0].body
+
+    def test_short_comment_with_keywords_kept(self):
+        """Short comments with financial keywords are kept (keyword exemption)."""
+        from src.scoring import score_and_select_comments
+
+        comments = [
+            self._make_comment('More spy puts', financial_score=0.1),
+            self._make_comment('Nice'),
+        ]
+        posts = [self._make_post(comments)]
+
+        result = score_and_select_comments(posts)
+
+        assert len(result[0].comments) == 1
+        assert 'puts' in result[0].comments[0].body
+
+    def test_exact_min_words_kept(self):
+        """Comments with exactly MIN_WORD_COUNT words are kept."""
+        from src.scoring import score_and_select_comments, MIN_WORD_COUNT
+
+        body = ' '.join(['word'] * MIN_WORD_COUNT)
+        comments = [self._make_comment(body)]
+        posts = [self._make_post(comments)]
+
+        result = score_and_select_comments(posts)
+
+        assert len(result[0].comments) == 1
+
+    def test_url_only_filtered(self):
+        """URL-only comments (1 word, no keywords) are filtered."""
+        from src.scoring import score_and_select_comments
+
+        comments = [
+            self._make_comment('https://preview.redd.it/some-image.jpeg?width=800'),
+        ]
+        posts = [self._make_post(comments)]
+
+        result = score_and_select_comments(posts)
+
+        assert len(result[0].comments) == 0
+
+    def test_custom_min_words(self):
+        """Custom min_words parameter overrides default."""
+        from src.scoring import score_and_select_comments
+
+        comments = [
+            self._make_comment('one two three'),
+            self._make_comment('one two three four five six seven'),
+        ]
+        posts = [self._make_post(comments)]
+
+        result = score_and_select_comments(posts, min_words=3)
+
+        assert len(result[0].comments) == 2
+
+    def test_filter_before_top_n(self):
+        """Filtered comments don't consume top-N slots."""
+        from src.scoring import score_and_select_comments
+
+        # 3 good comments + 2 junk
+        comments = [
+            self._make_comment('This is a substantive comment about trading strategies'),
+            self._make_comment('Another good comment about market analysis today'),
+            self._make_comment('A third decent comment with some thoughts on positions'),
+            self._make_comment('Lol'),
+            self._make_comment('Nice'),
+        ]
+        posts = [self._make_post(comments)]
+
+        result = score_and_select_comments(posts, top_n=2)
+
+        # Should have 2 (top_n), not affected by filtered junk
+        assert len(result[0].comments) == 2
+        for c in result[0].comments:
+            assert len(c.body.split()) >= 5
+
+    def test_longer_comment_scores_higher(self):
+        """Longer comment with same base scores ranks higher due to length bonus."""
+        from src.scoring import score_and_select_comments
+
+        short_body = 'I like this stock here today'  # 6 words
+        long_body = ' '.join(['word'] * 100)  # 100 words
+
+        comments = [
+            self._make_comment(short_body, financial_score=0.5, author_trust_score=0.5),
+            self._make_comment(long_body, financial_score=0.5, author_trust_score=0.5),
+        ]
+        posts = [self._make_post(comments)]
+
+        result = score_and_select_comments(posts)
+
+        # Longer comment should have higher priority score
+        short_c = next(c for c in result[0].comments if len(c.body.split()) == 6)
+        long_c = next(c for c in result[0].comments if len(c.body.split()) == 100)
+        assert long_c.priority_score > short_c.priority_score

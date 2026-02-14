@@ -42,14 +42,11 @@ Sentiment Classification (CRITICAL):
 Only assign bullish or bearish if the comment expresses a belief about future direction.
 
 MARKET CONTEXT (when provided):
-On days with significant market moves (>0.8% on major indexes), many comments will be
-reactive — venting about losses, reporting current damage, or expressing frustration.
-These are NOT predictive and should be classified as neutral.
-Only classify as bullish/bearish if the commenter expresses a belief about FUTURE direction,
-not just reacting to what already happened today.
-Examples of reactive (neutral): "this market is trash", "my portfolio is dead today",
-"how did you lose on puts on a day like this"
-Examples of predictive (bearish): "I think there's a bigger dip coming", "SPY to 680 next week"
+Market data is provided for context. Consider whether the comment is actually related to
+today's market conditions before letting it influence your classification.
+Some comments may be reacting to today's move (venting, reporting damage) rather than
+making predictions — judge each comment on its own merits.
+A comment discussing a specific ticker trade may have nothing to do with broad index moves.
 
 Your job:
 1. Identify true sarcasm (inverse-meaning only) vs. WSB cultural humor

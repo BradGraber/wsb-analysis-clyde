@@ -236,9 +236,9 @@ class TestMarketContextInPrompt:
         from src.prompts import SYSTEM_PROMPT
 
         assert "MARKET CONTEXT" in SYSTEM_PROMPT
-        assert "0.8%" in SYSTEM_PROMPT
-        assert "reactive" in SYSTEM_PROMPT.lower()
-        assert "predictive" in SYSTEM_PROMPT.lower()
+        assert "context" in SYSTEM_PROMPT.lower()
+        assert "reacting" in SYSTEM_PROMPT.lower() or "reactive" in SYSTEM_PROMPT.lower()
+        assert "predictions" in SYSTEM_PROMPT.lower() or "predictive" in SYSTEM_PROMPT.lower()
 
     def test_build_user_prompt_includes_market_context(self):
         """build_user_prompt includes market context when provided."""
