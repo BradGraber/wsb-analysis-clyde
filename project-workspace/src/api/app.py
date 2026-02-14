@@ -20,10 +20,27 @@ Usage:
 
 import os
 import sqlite3
+import traceback
 from contextlib import asynccontextmanager
 from typing import Dict
 
-import traceback
+
+def _load_dotenv():
+    """Load .env file into os.environ if it exists."""
+    env_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        ".env",
+    )
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, _, value = line.partition("=")
+                    os.environ.setdefault(key.strip(), value.strip())
+
+
+_load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
